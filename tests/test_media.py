@@ -156,7 +156,7 @@ class IconMapTest(unittest.TestCase):
         return os.path.join(support.SRC, value.replace('./', '', 1))
 
     def test_thereAreEntries(self):
-        self.assertGreater(len(list(self.entries())), 20, 'icomap looks empty')
+        self.assertGreaterEqual(len(list(self.entries())), 10, 'icomap looks empty')
 
     def test_everyEntryPointsAtAFile(self):
         missing = ['[%s] %s -> %s' % (s, k, v)
@@ -177,8 +177,8 @@ class IconMapTest(unittest.TestCase):
                          '\n  '.join(empty))
 
     def test_defaultSectionCoversEveryKey(self):
-        """ico() falls back to the default section, so it must be complete"""
-        default = set(self.icomap['default'])
+        """ico() falls back to Dark, so it must be complete"""
+        default = set(self.icomap.get('Dark', self.icomap.get('flat(dark)', {})))
         for section, mapping in self.icomap.items():
             self.assertEqual(set(mapping) - default, set(),
                              '%s has keys the default section lacks' % section)
@@ -187,7 +187,7 @@ class IconMapTest(unittest.TestCase):
         """files nothing points at - they still ship in every release tarball"""
         referenced = {os.path.normpath(self.resolve(v)) for _, _, v in self.entries()}
         # these are used from code or packaging rather than from icomap
-        for name in ('CosmicRock.jpg', 'easyPlay.png', 'easyPlay.svg',
+        for name in ('audio.png', 'icon.png',
                      'icomap.json', 'license.txt'):
             referenced.add(os.path.join(self.icondir, name))
         orphans = []
@@ -199,6 +199,42 @@ class IconMapTest(unittest.TestCase):
         self.assertEqual(sorted(orphans), [], 'unused icon files: %s' % sorted(orphans))
 
 
+class AudioDisplayTest(unittest.TestCase):
+    def setUp(self):
+        support.app()
+
+    def test_audio_display_controller_shows_audio_png(self):
+        from EasyPlayer import AudioDisplayController, AUDIO_FALLBACK_IMAGE
+        class MockPlayer:
+            def __init__(self):
+                self.isAudioOnly = True
+                self.shown = None
+                self.hidden = False
+            def showImage(self, path):
+                self.shown = path
+                self.hidden = False
+            def hideImage(self):
+                self.shown = None
+                self.hidden = True
+
+        class MockSettings:
+            pass
+
+        p = MockPlayer()
+        s = MockSettings()
+        ctrl = AudioDisplayController(p, s, AUDIO_FALLBACK_IMAGE)
+
+        # 1. With audio only, audio fallback image must be displayed
+        ctrl.update()
+        self.assertEqual(p.shown, AUDIO_FALLBACK_IMAGE)
+
+        # 2. Video stream must hide the image
+        p.isAudioOnly = False
+        ctrl.update()
+        self.assertTrue(p.hidden)
+
+
+
 class FolderScanTest(unittest.TestCase):
 
     def setUp(self):
@@ -207,16 +243,15 @@ class FolderScanTest(unittest.TestCase):
         self.names = [os.path.basename(p)
                       for p in PlaylistManager().scanTree(support.media('a.png'))]
 
-    def test_findsMediaAcrossSubfolders(self):
-        for name in ('a.png', 'b.png', 'movie.mkv', 'c.png', 'd.png'):
+    def test_findsMediaInSameFolderOnly(self):
+        for name in ('a.png', 'b.png', 'movie.mkv'):
             self.assertIn(name, self.names, name)
+        for name in ('c.png', 'd.png'):
+            self.assertNotIn(name, self.names, name)
 
-    def test_skipsNonMediaAndHiddenFolders(self):
+    def test_skipsNonMediaAndHiddenFiles(self):
         self.assertNotIn('notes.txt', self.names)
         self.assertNotIn('skip.png', self.names)
-
-    def test_topLevelBeforeSubfolders(self):
-        self.assertLess(self.names.index('b.png'), self.names.index('c.png'))
 
     def test_sortedWithinAFolder(self):
         self.assertLess(self.names.index('a.png'), self.names.index('b.png'))

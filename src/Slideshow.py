@@ -105,6 +105,7 @@ class SlideshowController(QtCore.QObject):
         self._player = player
         self._ui_Slider = mainframe.ui_Slider
         self._ui_InfoLabel = mainframe.ui_InfoLabel
+        self._ui_RemainingLabel = getattr(mainframe, 'ui_RemainingLabel', None)
         self._settings = mainframe.settings
         self._SLIDER_RESOLUTION = mainframe.SLIDER_RESOLUTION
         self._active = False
@@ -167,7 +168,16 @@ class SlideshowController(QtCore.QObject):
             self._ui_Slider.setSliderPosition(sliderPos)
             self._ui_Slider.blockSignals(False)
 
+        total_dur = count * dur
+        has_hours = total_dur >= 3600
+
         def fmt(s):
             s = int(s)
-            return '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
-        self._ui_InfoLabel.setText(fmt(pos * dur) + "  \u25C6  " + fmt(count * dur))
+            if has_hours:
+                return '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
+            return '{:02}:{:02}'.format(s // 60, s % 60)
+
+        self._ui_InfoLabel.setText(f"{fmt(pos * dur)} / {fmt(total_dur)}")
+        if self._ui_RemainingLabel is not None:
+            rem = max(0, (count - pos) * dur)
+            self._ui_RemainingLabel.setText("-" + fmt(rem))

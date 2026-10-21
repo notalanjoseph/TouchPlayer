@@ -1,3 +1,0 @@
-recursive-include easyplayer/icons *
-include easyplayer/lib/mpv.py
-include README.md

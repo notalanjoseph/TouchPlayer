@@ -1,0 +1,107 @@
+name: Release
+
+'on':
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install system dependencies for verification
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libmpv2 \
+            ffmpeg \
+            libegl1 \
+            libgl1 \
+            pulseaudio-utils
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run verification test suite
+        run: python3 -m unittest discover -s tests
+
+      - name: Build Universal Release Tarball
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          mkdir -p dist
+          tar -czf dist/touchplayer-${VERSION}.tar.gz \
+            --transform "s,^,touchplayer-${VERSION}/," \
+            src install.sh uninstall.sh LICENSE README.md pyproject.toml requirements.txt
+
+      - name: Build Debian (.deb) Package
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          PKG_DIR="dist/pkg-deb/touchplayer_${VERSION}_all"
+          mkdir -p "${PKG_DIR}/DEBIAN"
+          mkdir -p "${PKG_DIR}/opt/touchplayer"
+          mkdir -p "${PKG_DIR}/usr/local/bin"
+          mkdir -p "${PKG_DIR}/usr/share/applications"
+
+          # Debian package control file
+          cat << EOF > "${PKG_DIR}/DEBIAN/control"
+          Package: touchplayer
+          Version: ${VERSION}
+          Section: video
+          Priority: optional
+          Architecture: all
+          Depends: python3, python3-pyqt6, libmpv2 | libmpv1, ffmpeg, python3-pil
+          Maintainer: TouchPlayer Developers
+          Description: Gesture-driven Wayland media player for Linux touchscreen laptops
+          EOF
+          chmod 644 "${PKG_DIR}/DEBIAN/control"
+
+          # Copy application sources, icons, and libmpv binding
+          cp -r src/*.py "${PKG_DIR}/opt/touchplayer/"
+          cp -r src/icons "${PKG_DIR}/opt/touchplayer/"
+          cp -r src/lib "${PKG_DIR}/opt/touchplayer/"
+          chmod +x "${PKG_DIR}/opt/touchplayer/EasyPlayer.py"
+
+          # Binary wrapper script
+          cat << 'EOF' > "${PKG_DIR}/usr/local/bin/touchplayer"
+          #!/bin/bash
+          exec python3 /opt/touchplayer/EasyPlayer.py "$@"
+          EOF
+          chmod 755 "${PKG_DIR}/usr/local/bin/touchplayer"
+
+          # Desktop launcher
+          cp build/TouchPlayer.desktop "${PKG_DIR}/usr/share/applications/TouchPlayer.desktop"
+          chmod 644 "${PKG_DIR}/usr/share/applications/TouchPlayer.desktop"
+
+          # Build .deb archive
+          dpkg-deb --build "${PKG_DIR}" "dist/touchplayer_${VERSION}_all.deb"
+          rm -rf dist/pkg-deb
+
+      - name: Generate Checksums
+        run: |
+          cd dist
+          sha256sum touchplayer* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release and upload packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/*.deb dist/*.tar.gz dist/SHA256SUMS \
+            --title "TouchPlayer ${{ github.ref_name }}" \
+            --generate-notes

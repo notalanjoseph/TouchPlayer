@@ -109,7 +109,7 @@ whose violation caused the slideshow to run behind a "Play" icon.
 
 ## Things that are not covered
 
-- The spectrum analyser, and `Player.paintGL` in any detail - `test_gui.py`
+- `Player.paintGL` in any detail - `test_gui.py`
   proves the render context comes up and draws, nothing finer than that.
 - Drag and drop into the playlist panel, and the file dialogs themselves.
 - Window layout and geometry - the toolbar is only checked for icons being

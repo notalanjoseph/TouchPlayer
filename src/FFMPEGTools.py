@@ -32,12 +32,8 @@ BIN = "ffmpeg"
 
 def setupRotatingLogger(logName,logConsole,logFolder=None):
     logSize=5*1024*1024 #5MB
-    scriptDir = OSTools().getLocalPath(__file__)
-    if os.access(scriptDir, os.W_OK):
-        folder = scriptDir
-    else:
-        folder= OSTools().joinPathes(OSTools().getHomeDirectory(),".config",logFolder or logName)
-        OSTools().ensureDirectory(folder)
+    folder = OSTools().joinPathes(OSTools().getHomeDirectory(),".config",logFolder or logName)
+    OSTools().ensureDirectory(folder)
     logPath = OSTools().joinPathes(folder,logName+".log")
     fh= RotatingFileHandler(logPath,maxBytes=logSize,backupCount=5)
     fh.rotator=OSTools().compressor
@@ -171,19 +167,22 @@ class OSTools():
         return [(0, int(part)) if part.isdigit() else (1, part.casefold())
                 for part in re.split(r'(\d+)', name) if part]
 
-    #all files below aDir matching the extensions (lowercase, with dot), sorted
-    #like a file manager, hidden folders skipped. maxFiles caps runaway trees.
+    # all media files directly inside aDir matching the extensions (non-recursive)
     def collectFiles(self, aDir, extensions, maxFiles=5000):
         found = []
-        for dirpath, dirnames, filenames in os.walk(aDir):
-            dirnames[:] = sorted((d for d in dirnames if not d.startswith('.')),
-                                 key=self._naturalSortKey)
-            for name in sorted(filenames, key=self._naturalSortKey):
-                if self.getExtension(name).lower() in extensions:
-                    found.append(os.path.join(dirpath, name))
-                    if len(found) >= maxFiles:
-                        Log.info("Directory scan capped at %d files", maxFiles)
-                        return found
+        try:
+            entries = os.listdir(aDir)
+        except OSError:
+            return found
+        for name in sorted(entries, key=self._naturalSortKey):
+            if name.startswith('.'):
+                continue
+            full_path = os.path.join(aDir, name)
+            if os.path.isfile(full_path) and self.getExtension(name).lower() in extensions:
+                found.append(full_path)
+                if len(found) >= maxFiles:
+                    Log.info("Directory scan capped at %d files", maxFiles)
+                    return found
         return found
 
     def ensureDirectory(self, path, tail=None):
@@ -262,8 +261,10 @@ class OSTools():
         os.environ[key] = value
 
     def setGTKEnvironment(self):
-        #won't work on cinn 22.2 / numbat: needs qt6ct
-        #os.environ["QT_QPA_PLATFORMTHEME"] = "@qtplatform@"
+        # won't work on cinn 22.2 / numbat: needs qt6ct
+        # os.environ["QT_QPA_PLATFORMTHEME"] = "@qtplatform@"
+        if os.environ.get("XDG_SESSION_TYPE") == "wayland" or "WAYLAND_DISPLAY" in os.environ:
+            return
         os.environ['QT_QPA_PLATFORM'] = 'xcb'
 
 class ConfigAccessor():
@@ -305,6 +306,9 @@ class ConfigAccessor():
 
     def store(self):
         try:
+            folder = os.path.dirname(self._path)
+            if not os.path.exists(folder):
+                os.makedirs(folder, exist_ok=True)
             with open(self._path, 'w') as aFile:
                 self.parser.write(aFile)
         except IOError:
@@ -401,7 +405,7 @@ class FFPacketProbe():
         result = Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         if len(result[0]) == 0:
             raise IOError('No such media file ' + self.path)
-        lines = result[0].decode("utf-8").split('\n')
+        lines = result[0].decode("utf-8", errors="replace").split('\n')
         for index, text in enumerate(lines):
             if len(text) > 0:
                 raw = text.split(',')
@@ -693,7 +697,7 @@ class FFStreamProbe():
         result = Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         if len(result[0]) == 0:
             return False
-        lines = result[0].decode("utf-8").split('\n')
+        lines = result[0].decode("utf-8", errors="replace").split('\n')
         for a in lines:
             if re.match(r'interlaced_frame',a):
                 return  "1" in a
@@ -713,7 +717,7 @@ class FFStreamProbe():
             return 0.0
         firstFrame = None
         start = None
-        lines = result[0].decode("utf-8").split('\n')
+        lines = result[0].decode("utf-8", errors="replace").split('\n')
         for a in lines:
             raw = a.split(',')
             try:
@@ -741,7 +745,7 @@ class FFStreamProbe():
         self.subtitle=[]
         self.formatInfo = None
 
-        lines = result[0].decode("utf-8").split('\n')
+        lines = result[0].decode("utf-8", errors="replace").split('\n')
         for a in lines:
             if re.match(r'\[STREAM\]', a):
                 datalines = []
@@ -1049,7 +1053,7 @@ class VideoFormatInfo():
             val=self.NA
             try:
                 (key, val) = entry.strip().split('=')
-            except:
+            except Exception:
                 Log.error("Error in entry:%s", entry)
             if self.NA != val:
                 if self.TAG in key:
@@ -1114,7 +1118,7 @@ class VideoStreamInfo():
 
             try:
                 (key, val) = entry.strip().split('=')
-            except:
+            except Exception:
                 Log.error("Error in entry:%s", entry)
 
             if self.NA != val:
@@ -1320,7 +1324,7 @@ class FFFrameProbe():
         self.frames = []
         datalines = []
 
-        lines = result[0].decode("utf-8").split('\n')
+        lines = result[0].decode("utf-8", errors="replace").split('\n')
         for a in lines:
             if re.match(r'\[FRAME\]', a):
                 datalines = []
@@ -1433,7 +1437,7 @@ class FFmpegVersion():
             return
 
         if len(result[0]) > 0:
-            text = result[0].decode("utf-8")
+            text = result[0].decode("utf-8", errors="replace")
             m = re.search(r"(\d+)\.(\d+)", text)
             if m is None:
                 self.error = "Can't parse ffmpeg version"

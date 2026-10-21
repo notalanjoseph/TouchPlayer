@@ -1,59 +1,18 @@
-    {"default":
-    { "rmAction":"./icons/close-x.svg",
-    "loadAction" :"./icons/loadfile.svg",
-    "stopAction":"./icons/stop-red-icon.png",
-    "saveAction":"./icons/save-as-icon.svg",
-    "infoAction":"./icons/info.png",
-    "photoAction":"./icons/screenshot.svg",
-    "playStart" :"./icons/play.png",
-    "playPause" :"./icons/pause.png",
-    "mediaSettings":"./icons/settings.svg",
-	"fullscreen":"./icons/fullscreen.svg",
-	"next": "./icons/arrow-next-green.svg",
-	"prev":"./icons/arrow-prev-green.svg",
-	"playlistPanel":"./icons/playlist.svg",
-	"newList":"./icons/newList.svg",
-	"addFile":"./icons/loadfile.svg",
-	"delItem":"./icons/close-x.svg",
-	"saveList":"./icons/save-as-icon.svg"
-    },
-    "flat(light)": {
-    "rmAction":"./icons/flaticons/remove.svg",
-    "loadAction" :"./icons/flaticons/open.svg",
-    "stopAction":"./icons/flaticons/stop.svg",
-    "saveAction":"./icons/flaticons/save.svg",
-    "infoAction":"./icons/flaticons/info.svg",
-    "photoAction":"./icons/flaticons/screenshot.svg",
-    "playStart" :"./icons/flaticons/play.svg",
-    "playPause" :"./icons/flaticons/pause.svg",
-    "mediaSettings":"./icons/flaticons/settings.svg",
-	"fullscreen":"./icons/flaticons/fullscreen.png",
-	"newList":"./icons/flaticons/newList.svg",
-	"addFile":"./icons/flaticons/open.svg",
-	"delItem":"./icons/flaticons/remove.svg",
-	"saveList":"./icons/flaticons/save.svg",
-	"playlistPanel":"./icons/flaticons/playlist.svg",
-	"next":"./icons/flaticons/next.svg",
-	"prev":"./icons/flaticons/prev.svg"
-
-    },
-	"flat(dark)": {
-	  "rmAction":"./icons/flatdark/remove.svg",
-	  "loadAction" :"./icons/flatdark/open.svg",
-	  "stopAction":"./icons/flatdark/stop.svg",
-	  "saveAction":"./icons/flatdark/save.svg",
-	  "infoAction":"./icons/flatdark/info.svg",
-	  "photoAction":"./icons/flatdark/screenshot.svg",
-	  "playStart" :"./icons/flatdark/play.svg",
-	  "playPause" :"./icons/flatdark/pause.svg",
-	  "mediaSettings":"./icons/flatdark/settings.svg",
-	"fullscreen":"./icons/flatdark/fullscreen.png",
-	"newList":"./icons/flatdark/newList.svg",
-	"addFile":"./icons/flatdark/open.svg",
-	"delItem":"./icons/flatdark/remove.svg",
-	"saveList":"./icons/flatdark/save.svg",
-	"playlistPanel":"./icons/flatdark/playlist.svg",
-	"next":"./icons/flatdark/next.svg",
-	"prev":"./icons/flatdark/prev.svg"
-	  }
-    }
+{
+  "Dark": {
+    "rmAction": "./icons/buttons/remove.png",
+    "loadAction": "./icons/buttons/open.png",
+    "saveAction": "./icons/buttons/save.png",
+    "infoAction": "./icons/buttons/info.png",
+    "playStart": "./icons/buttons/play.png",
+    "playPause": "./icons/buttons/pause.png",
+    "mediaSettings": "./icons/buttons/settings.png",
+    "newList": "./icons/buttons/newList.png",
+    "addFile": "./icons/buttons/open.png",
+    "delItem": "./icons/buttons/remove.png",
+    "saveList": "./icons/buttons/save.png",
+    "playlistPanel": "./icons/buttons/playlist.png",
+    "next": "./icons/buttons/next.png",
+    "prev": "./icons/buttons/prev.png"
+  }
+}

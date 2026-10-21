@@ -1,6 +1,0 @@
-EasyPlayer icons
-Copyright (c) 2026 Kanehekili
-
-All icons in this directory and its subdirectories were created for
-EasyPlayer and are licensed under GPL-2.0-or-later, the same terms as
-EasyPlayer itself. See ../../LICENSE.

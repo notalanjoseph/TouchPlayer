@@ -39,6 +39,17 @@ def init(ep_config, icomap):
     _icomap = icomap
 
 
+def _getIcomap():
+    global _icomap
+    if _icomap is None:
+        try:
+            import EasyPlayer
+            _icomap = getattr(EasyPlayer, 'ICOMAP', None)
+        except Exception:
+            pass
+    return _icomap
+
+
 def _getLastDir():
     if _lastDir:
         return _lastDir
@@ -65,7 +76,7 @@ def _setLastDir(path):
 
 
 def _scanTree(startFile):
-    """Every picture/video in the start file's directory tree, sorted."""
+    """Every picture/video directly in the start file's directory, sorted (non-recursive)."""
     ostools = OSTools()
     root = ostools.getDirectory(startFile)
     if not root or not ostools.isDirectory(root):
@@ -216,7 +227,9 @@ class PlaylistPanel(QtWidgets.QFrame):
 
         def mkbtn(ico_key, tip):
             b = QtWidgets.QToolButton()
-            b.setIcon(QtGui.QIcon(_icomap.ico(ico_key)))
+            im = _getIcomap()
+            if im is not None:
+                b.setIcon(QtGui.QIcon(im.ico(ico_key)))
             b.setToolTip(tip)
             return b
 
@@ -286,8 +299,23 @@ class PlaylistPanel(QtWidgets.QFrame):
         self.btnNext.setEnabled(enabled)
 
     def setPlaying(self, isPlaying):
+        self._isPlaying = bool(isPlaying)
         ico = "playPause" if isPlaying else "playStart"
-        self.btnPlay.setIcon(QtGui.QIcon(_icomap.ico(ico)))
+        im = _getIcomap()
+        if im is not None:
+            self.btnPlay.setIcon(QtGui.QIcon(im.ico(ico)))
+
+    def updateIcons(self):
+        im = _getIcomap()
+        if im is None:
+            return
+        self.btnNew.setIcon(QtGui.QIcon(im.ico("newList")))
+        self.btnPrev.setIcon(QtGui.QIcon(im.ico("prev")))
+        self.btnNext.setIcon(QtGui.QIcon(im.ico("next")))
+        self.btnPlay.setIcon(QtGui.QIcon(im.ico("playPause" if getattr(self, '_isPlaying', False) else "playStart")))
+        self.btnAdd.setIcon(QtGui.QIcon(im.ico("addFile")))
+        self.btnDel.setIcon(QtGui.QIcon(im.ico("delItem")))
+        self.btnSave.setIcon(QtGui.QIcon(im.ico("saveList")))
 
     def getPaths(self):
         return list(self._paths)

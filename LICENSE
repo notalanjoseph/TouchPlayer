@@ -1,5 +1,6 @@
-EasyPlayer - a simple video and audio player based on mpv and Qt6
-Copyright (C) 2026 Kanehekili
+TouchPlayer - a lightweight, gesture-driven Wayland media player
+Copyright (C) 2026 Alan Joseph <alan.joseph@hatio.in>
+Derived from EasyPlayer, Copyright (C) 2026 Kanehekili
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

@@ -29,11 +29,10 @@ from PyQt6.QtCore import QByteArray, pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
-import sys, json, FFMPEGTools, getopt, traceback, locale, re, math
+import sys, os, json, FFMPEGTools, getopt, traceback, locale, re, math, time
 from threading import Condition
-from QtTools import SliderThread, installSigIntHandler
+from QtTools import SliderThread, installSigIntHandler, VolumeSlider, BrightnessSlider, VideoSlider, ColorTempSlider, ElidedTitleLabel, DragSpacer, makeCenteredEmojiIcon
 from Slideshow import ImageOverlay, SlideshowController, PICTURE_EXTENSIONS
-from AudioPlay import SpectrumController, SpectrumOverlay, HAS_SPECTRUM
 import Playlist
 from Playlist import PlaylistPanel, PlaylistManager, PLAYLIST_EXTENSIONS, MEDIA_EXTENSIONS
 import Osd
@@ -43,11 +42,13 @@ from Osd import OsdController
 
 global Log
 global AppName
-AppName="EasyPlayer"
+global ep_config
+AppName="TouchPlayer"
 Log = FFMPEGTools.Log
-AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "CosmicRock.jpg")
+ep_config = None
+AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "audio.png")
 #####################################################
-Version = "@xxx@"
+Version = "1.0.0"
 #####################################################
 
 
@@ -74,6 +75,11 @@ class Player(QOpenGLWidget):
     itemEnded = pyqtSignal()  # current track played to its end (mpv thread -> queued)
     mouseActive = pyqtSignal()  # mouse moved over the video surface
     overlayRaised = pyqtSignal()  # z-order of the video overlays changed
+    volumeChanged = pyqtSignal(int, bool)  # (volume 0-100, is_muted)
+    brightnessChanged = pyqtSignal(int)  # (brightness -50 to 50)
+    colorTempChanged = pyqtSignal(int)  # (temperature in Kelvin 3000-10000)
+    speedChanged = pyqtSignal(float)  # (playback speed 0.1 to 10.0)
+    videoSurfaceTapped = pyqtSignal(bool)  # (was_osd_visible_at_touch_start)
 
     def __init__(self, parent, path=None, isVirtual=False):
         super().__init__(parent)
@@ -86,6 +92,7 @@ class Player(QOpenGLWidget):
         self.mpv = MPV(**self._getMPVArgs(isVirtual))
         self.filePath = path
         self.isPlaylist = False
+        self._speed = 1.0
         self._hookEvents()
         self._proc_addr_wrapper = MpvGlGetProcAddressFn(get_process_address)
         self.triggerUpdate.connect(self.do_update)  # works only if video
@@ -95,15 +102,21 @@ class Player(QOpenGLWidget):
         self.sliderThread = None
         self.lastError = None
         self.isAudioOnly = False
-        self.durString = "00:00:00"
+        self.durString = "00:00"
         self._opengl_fbo = None
-        self.spectrumCtrl = SpectrumController(self)
         self.zoomCtrl = ZoomController(self)
         self._dragPos = None
         self._imageOverlay = ImageOverlay(self)
         self._imageOverlay.hide()
         self.playlistManager = PlaylistManager()
         self.setMouseTracking(True)  # moves without a pressed button - the OSD needs them
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
+        self._prevTouchDist = None
+        self._prevTouchMid = None
+        self._isPinching = False
+        self._singleTouchDrag = None
+        self._lastTapTime = 0
+        self._lastTapPos = None
 
     def initializeGL(self) -> None:
         self.ctx = MpvRenderContext(
@@ -186,11 +199,175 @@ class Player(QOpenGLWidget):
         self.mpv.observe_property("time-pos", self._onTimePos)  # messes up timing!
         self.mpv.observe_property("media-title", self._onMediaTitle)
         self.mpv.observe_property("duration", self._onDuration)
+        self.mpv.observe_property("volume", self._onMpvVolume)
+        self.mpv.observe_property("mute", self._onMpvMute)
+        self.mpv.observe_property("brightness", self._onMpvBrightness)
+        self.mpv.observe_property("speed", self._onMpvSpeed)
+
+    def _onMpvVolume(self, _name, val):
+        if val is not None and not self.closePending:
+            self.volumeChanged.emit(int(val), self.isMuted())
+
+    def _onMpvMute(self, _name, val):
+        if val is not None and not self.closePending:
+            is_muted = val is True or val == "yes"
+            self.volumeChanged.emit(self.getVolume(), is_muted)
+
+    def _onMpvBrightness(self, _name, val):
+        if val is not None and not self.closePending:
+            self.brightnessChanged.emit(int(val))
+
+    def _onMpvSpeed(self, _name, val):
+        if val is not None and not self.closePending:
+            try:
+                s = float(val)
+                self._speed = s
+                self.speedChanged.emit(s)
+            except Exception:
+                pass
 
     def resizeGL(self, w, h):
         self._opengl_fbo = True
-        self.spectrumCtrl.setGeometry(0, 0, w, h)
         self._imageOverlay.setGeometry(0, 0, w, h)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        w, h = self.width(), self.height()
+        if hasattr(self, '_imageOverlay'):
+            self._imageOverlay.setGeometry(0, 0, w, h)
+
+    def event(self, event):
+        if event.type() in (
+            QtCore.QEvent.Type.TouchBegin,
+            QtCore.QEvent.Type.TouchUpdate,
+            QtCore.QEvent.Type.TouchEnd,
+            QtCore.QEvent.Type.TouchCancel,
+        ):
+            if self._handleTouchEvent(event):
+                event.accept()
+                return True
+        return super().event(event)
+
+    def _isInsideOsd(self, pos):
+        pt = pos.toPoint() if hasattr(pos, 'toPoint') else QtCore.QPoint(int(pos.x()), int(pos.y()))
+        osd = getattr(self, '_osdOverlay', None)
+        if osd is not None and osd.isVisible() and osd.geometry().contains(pt):
+            return True
+        topBar = getattr(self, '_osdTopBar', None)
+        if topBar is not None and topBar.isVisible() and topBar.geometry().contains(pt):
+            return True
+        return False
+
+    def _handleTouchEvent(self, event):
+        active_points = [
+            p for p in event.points()
+            if p.state() != QtGui.QEventPoint.State.Released
+        ]
+
+        now = time.time()
+
+        if event.type() in (QtCore.QEvent.Type.TouchEnd, QtCore.QEvent.Type.TouchCancel) or len(active_points) == 0:
+            was_tap = (
+                not getattr(self, '_touchMoved', True)
+                and (now - getattr(self, '_touchStartTime', 0)) < 0.35
+                and not self._isPinching
+            )
+            osd_was_vis = getattr(self, '_osdVisibleAtTouch', False)
+            self._isPinching = False
+            self._prevTouchDist = None
+            self._prevTouchMid = None
+            self._singleTouchDrag = None
+            self._touchMoved = True
+            self.restoreCursor()
+            if was_tap and event.type() != QtCore.QEvent.Type.TouchCancel:
+                self.videoSurfaceTapped.emit(osd_was_vis)
+            return True
+
+        if len(active_points) >= 2:
+            self._touchMoved = True
+            p1 = active_points[0].position()
+            p2 = active_points[1].position()
+            dist = math.hypot(p2.x() - p1.x(), p2.y() - p1.y())
+            midX = (p1.x() + p2.x()) / 2.0
+            midY = (p1.y() + p2.y()) / 2.0
+
+            if not self._isPinching or self._prevTouchDist is None or self._prevTouchDist <= 0:
+                self._isPinching = True
+                self._prevTouchDist = dist
+                self._prevTouchMid = (midX, midY)
+                self._singleTouchDrag = None
+                self._lastTapTime = 0
+                self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                return True
+
+            ratio = dist / self._prevTouchDist
+            dx = midX - self._prevTouchMid[0]
+            dy = midY - self._prevTouchMid[1]
+
+            if self.zoomCtrl.isZoomable():
+                self.zoomCtrl.pinchZoom(ratio, midX, midY, dx, dy)
+
+            self._prevTouchDist = dist
+            self._prevTouchMid = (midX, midY)
+            return True
+
+        elif len(active_points) == 1:
+            pos = active_points[0].position()
+
+            if self._isInsideOsd(pos):
+                self._touchMoved = True
+                return False
+
+            if self._isPinching:
+                self._isPinching = False
+                self._prevTouchDist = None
+                self._prevTouchMid = None
+                if self.zoomCtrl.isActive():
+                    self._singleTouchDrag = pos
+                return True
+
+            if event.type() == QtCore.QEvent.Type.TouchBegin:
+                self._touchStartTime = now
+                self._touchStartPos = QtCore.QPointF(pos)
+                self._touchMoved = False
+                osd = getattr(self, '_osdOverlay', None)
+                topBar = getattr(self, '_osdTopBar', None)
+                self._osdVisibleAtTouch = bool((osd and osd.isVisible()) or (topBar and topBar.isVisible()))
+
+                if self._lastTapPos is not None:
+                    dist_tap = math.hypot(pos.x() - self._lastTapPos.x(), pos.y() - self._lastTapPos.y())
+                    if (now - self._lastTapTime) < 0.35 and dist_tap < 35:
+                        if self.zoomCtrl.isActive():
+                            self.zoomCtrl.resetZoom()
+                            self._touchMoved = True
+                        self._lastTapTime = 0
+                        self._lastTapPos = None
+                        self._singleTouchDrag = None
+                        return True
+                self._lastTapTime = now
+                self._lastTapPos = QtCore.QPointF(pos)
+
+                if self.zoomCtrl.isActive():
+                    self._singleTouchDrag = pos
+                    self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                return True
+
+            elif event.type() == QtCore.QEvent.Type.TouchUpdate:
+                if getattr(self, '_touchStartPos', None) is not None:
+                    if math.hypot(pos.x() - self._touchStartPos.x(), pos.y() - self._touchStartPos.y()) > 15:
+                        self._touchMoved = True
+                if self.zoomCtrl.isActive():
+                    if self._singleTouchDrag is not None:
+                        dx = pos.x() - self._singleTouchDrag.x()
+                        dy = pos.y() - self._singleTouchDrag.y()
+                        if math.hypot(dx, dy) > 10:
+                            self._lastTapTime = 0
+                        self.zoomCtrl.panBy(dx, dy)
+                    self._singleTouchDrag = pos
+                    self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                return True
+
+        return False
 
     def wheelEvent(self, event):
         if event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier and self.zoomCtrl.isZoomable():
@@ -216,11 +393,18 @@ class Player(QOpenGLWidget):
         self._onZoomChanged(self.zoomCtrl.isActive())
 
     def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.MouseButton.LeftButton and self.zoomCtrl.isActive():
-            self._dragPos = event.position()
-            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
-            event.accept()
-            return
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            if not self._isInsideOsd(event.position()):
+                self._mousePressTime = time.time()
+                self._mousePressPos = event.position()
+                osd = getattr(self, '_osdOverlay', None)
+                topBar = getattr(self, '_osdTopBar', None)
+                self._osdVisibleAtClick = bool((osd and osd.isVisible()) or (topBar and topBar.isVisible()))
+            if self.zoomCtrl.isActive():
+                self._dragPos = event.position()
+                self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -234,11 +418,19 @@ class Player(QOpenGLWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if self._dragPos is not None and event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self._dragPos = None
-            self._onZoomChanged(self.zoomCtrl.isActive())
-            event.accept()
-            return
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            now = time.time()
+            if getattr(self, '_mousePressPos', None) is not None:
+                dist = math.hypot(event.position().x() - self._mousePressPos.x(),
+                                  event.position().y() - self._mousePressPos.y())
+                if (now - getattr(self, '_mousePressTime', 0)) < 0.35 and dist < 15:
+                    self.videoSurfaceTapped.emit(getattr(self, '_osdVisibleAtClick', False))
+                self._mousePressPos = None
+            if self._dragPos is not None:
+                self._dragPos = None
+                self._onZoomChanged(self.zoomCtrl.isActive())
+                event.accept()
+                return
         super().mouseReleaseEvent(event)
 
     def paintGL(self):
@@ -277,6 +469,9 @@ class Player(QOpenGLWidget):
         path = self.mpv.path
         if path and OSTools().getExtension(path).lower() in PICTURE_EXTENSIONS:
             return  # stills are timed by the slideshow, not by mpv
+        if getattr(self, 'duration', 0) and self.duration > 0:
+            self._timePos = self.duration
+            self.triggerUpdate.emit(self.duration)
         self.itemEnded.emit()
 
     def hasNextTrack(self):
@@ -413,7 +608,11 @@ class Player(QOpenGLWidget):
         if val is not None:
             self.duration = val
             Log.info("durance detected:%.3f" % (val))  
-            self.durString = '{:02.0f}:{:02.0f}:{:02.0f}'.format(val // 3600, val % 3600 // 60, val % 60)
+            s = max(0, int(round(val)))
+            if s >= 3600:
+                self.durString = '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
+            else:
+                self.durString = '{:02}:{:02}'.format(s // 60, s % 60)
             self._on_update()
     
     def _onReadyWait(self, name, val):
@@ -431,6 +630,8 @@ class Player(QOpenGLWidget):
 
     def setPaused(self, paused):
         if self.mpv is not None:
+            if not paused and self.isEOF():
+                self.seek(0)
             self.mpv.pause = paused
 
     def setAudio(self, idx):
@@ -440,6 +641,92 @@ class Player(QOpenGLWidget):
         else:
             self.mpv["mute"] = "no"
             self.mpv.audio = idx
+
+    def setVolume(self, val):
+        if self.mpv is not None:
+            self.mpv.volume = max(0, min(100, val))
+            if val > 0 and self.isMuted():
+                self.setMuted(False)
+            else:
+                self.volumeChanged.emit(self.getVolume(), self.isMuted())
+
+    def getVolume(self):
+        if self.mpv is not None:
+            try:
+                vol = self.mpv.volume
+                return int(vol) if vol is not None else 100
+            except Exception:
+                return 100
+        return 100
+
+    def setMuted(self, muted):
+        if self.mpv is not None:
+            self.mpv["mute"] = "yes" if muted else "no"
+            self.volumeChanged.emit(self.getVolume(), self.isMuted())
+
+    def isMuted(self):
+        if self.mpv is not None:
+            try:
+                m = self.mpv["mute"]
+                return m is True or m == "yes"
+            except Exception:
+                return False
+        return False
+
+    def setBrightness(self, val):
+        val = max(-30, min(30, int(val)))
+        if self.mpv is not None:
+            self.mpv.brightness = val
+            self.brightnessChanged.emit(self.getBrightness())
+        else:
+            self._brightness = val
+            self.brightnessChanged.emit(val)
+
+    def getBrightness(self):
+        if self.mpv is not None:
+            try:
+                b = self.mpv.brightness
+                return int(b) if b is not None else 0
+            except Exception:
+                return 0
+        return getattr(self, '_brightness', 0)
+
+    def setColorTemperature(self, temp_k):
+        temp_k = max(ColorTempSlider.MIN_TEMP, min(ColorTempSlider.MAX_TEMP, int(temp_k)))
+        self._colorTemp = temp_k
+        if self.mpv is not None:
+            try:
+                if temp_k == ColorTempSlider.DEFAULT_TEMP:
+                    self.mpv.command('vf', 'remove', '@colortemp')
+                else:
+                    self.mpv.command('vf', 'set', f'@colortemp:colortemperature=temperature={temp_k}:pl=0.5')
+            except Exception:
+                pass
+        self.colorTempChanged.emit(self.getColorTemperature())
+
+    def getColorTemperature(self):
+        return getattr(self, '_colorTemp', ColorTempSlider.DEFAULT_TEMP)
+
+    def setSpeed(self, speed):
+        speed = max(0.1, min(10.0, float(speed)))
+        self._speed = speed
+        if self.mpv is not None:
+            try:
+                self.mpv.speed = speed
+            except Exception:
+                pass
+            self.speedChanged.emit(self.getSpeed())
+        else:
+            self.speedChanged.emit(speed)
+
+    def getSpeed(self):
+        if self.mpv is not None:
+            try:
+                s = self.mpv.speed
+                return float(s) if s is not None else getattr(self, '_speed', 1.0)
+            except Exception:
+                return getattr(self, '_speed', 1.0)
+        return getattr(self, '_speed', 1.0)
 
     def _muteWhileSeeking(self, isSeeking):
         if self.mpv.audio == 0:
@@ -457,14 +744,8 @@ class Player(QOpenGLWidget):
             return OSTools().getDirectory(self.filePath)
         return OSTools().getHomeDirectory()
 
-    def takeScreenShot(self):
-        currentPath = OSTools().getPathWithoutExtension(self.filePath);
-        path = currentPath + str(self.duration) + '.jpg'
-        self.mpv.screenshot_to_file(path, includes="video")       
-
     def closeEvent(self, event: QCloseEvent) -> None:
         """free mpv_context and terminate player before closing the widget"""
-        self.spectrumCtrl.stopCapture()
         self.ctx.free()
         if self.sliderThread:
             self.sliderThread.stop()
@@ -580,6 +861,46 @@ class ZoomController:
         self.panX = self._clampPan(self.panX + dx / sizeX, w, sizeX)
         self.panY = self._clampPan(self.panY + dy / sizeY, h, sizeY)
         self._apply()
+
+    def pinchZoom(self, ratio, mx, my, dx=0.0, dy=0.0):
+        """Continuous pinch-to-zoom and pan.
+        ratio: scale change (e.g. dist_now / dist_prev)
+        mx, my: midpoint of the two fingers in widget coordinates
+        dx, dy: translation delta of the midpoint in widget coordinates
+        """
+        if not self.isZoomable() or ratio <= 0:
+            return
+        target = max(1.0, min(ZOOM_MAX, self.factor * ratio))
+        srcW, srcH = self._sourceSize()
+        if not srcW or not srcH:
+            return
+        w, h = self.player.width(), self.player.height()
+        fit = min(w / srcW, h / srcH)
+
+        newPanX = self._pan(mx, w, srcW * fit * self.factor, srcW * fit * target, self.panX)
+        newPanY = self._pan(my, h, srcH * fit * self.factor, srcH * fit * target, self.panY)
+
+        sizeX, sizeY = srcW * fit * target, srcH * fit * target
+        if sizeX > 0 and sizeY > 0:
+            newPanX = self._clampPan(newPanX + dx / sizeX, w, sizeX)
+            newPanY = self._clampPan(newPanY + dy / sizeY, h, sizeY)
+
+        self.factor = target
+        self.panX = newPanX
+        self.panY = newPanY
+        self._apply()
+
+    def resetZoom(self):
+        """Reset zoom factor to 100% and center view on the GUI thread."""
+        self.resetState()
+        overlay = self._overlay()
+        if overlay:
+            overlay.resetTransform()
+        else:
+            self.player.mpv.video_zoom = 0.0
+            self.player.mpv.video_pan_x = 0.0
+            self.player.mpv.video_pan_y = 0.0
+        self.player.update()
 
     def _pan(self, pos, winSize, oldSize, newSize, pan):
         start = (winSize - oldSize) / 2 + pan * oldSize
@@ -702,15 +1023,242 @@ class AudioDisplayController:
 
     def update(self):
         if not self._player.isAudioOnly:
-            self._player.spectrumCtrl.stopCapture()
-            return
-        if self._settings.hasEQ():
             self._player.hideImage()
-            self._player.spectrumCtrl.startCapture()
+            return
+        self._player.showImage(self._fallbackImage)
+
+
+class WindowControlGroup(QtWidgets.QWidget):
+    """Large, touch-friendly window control buttons (Minimize, Maximize/Restore, Close)."""
+
+    def __init__(self, parentWindow):
+        super().__init__(parentWindow)
+        self._win = parentWindow
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 4, 0)
+        layout.setSpacing(12)  # Generous touch-friendly gap
+
+        self.btnMin = QtWidgets.QPushButton("—")
+        self.btnMax = QtWidgets.QPushButton("□")
+        self.btnClose = QtWidgets.QPushButton("✕")
+
+        layout.addWidget(self.btnMin)
+        layout.addWidget(self.btnMax)
+        layout.addWidget(self.btnClose)
+
+        self.btnMin.setToolTip("Minimize")
+        self.btnMax.setToolTip("Maximize / Restore")
+        self.btnClose.setToolTip("Close")
+
+        self.btnMin.clicked.connect(self._win.showMinimized)
+        self.btnMax.clicked.connect(self._toggleMaximize)
+        self.btnClose.clicked.connect(self._win.close)
+
+        self.setTheme("Dark")
+
+    def setTheme(self, theme="Dark"):
+        is_dark = (str(theme).lower() != "light")
+        bg = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(0, 0, 0, 0.06)"
+        fg = "#e0e0e0" if is_dark else "#222222"
+        border = "rgba(255, 255, 255, 0.16)" if is_dark else "rgba(0, 0, 0, 0.14)"
+        hover_bg = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.12)"
+        hover_fg = "#ffffff" if is_dark else "#000000"
+        pressed_bg = "rgba(255, 255, 255, 0.35)" if is_dark else "rgba(0, 0, 0, 0.20)"
+
+        btnStyle = f"""
+            QPushButton {{
+                font-size: 16px;
+                font-weight: bold;
+                min-width: 38px;
+                min-height: 38px;
+                max-width: 38px;
+                max-height: 38px;
+                border-radius: 6px;
+                background-color: {bg};
+                color: {fg};
+                border: 1px solid {border};
+            }}
+            QPushButton:hover {{
+                background-color: {hover_bg};
+                color: {hover_fg};
+            }}
+            QPushButton:pressed {{
+                background-color: {pressed_bg};
+            }}
+        """
+        self.btnMin.setStyleSheet(btnStyle)
+        self.btnMax.setStyleSheet(btnStyle)
+
+        close_bg = "rgba(220, 50, 50, 0.25)" if is_dark else "rgba(220, 50, 50, 0.15)"
+        close_fg = "#ffffff" if is_dark else "#222222"
+        close_border = "rgba(220, 50, 50, 0.45)" if is_dark else "rgba(220, 50, 50, 0.35)"
+
+        closeBtnStyle = f"""
+            QPushButton {{
+                font-size: 20px;
+                font-weight: bold;
+                min-width: 38px;
+                min-height: 38px;
+                max-width: 38px;
+                max-height: 38px;
+                border-radius: 6px;
+                background-color: {close_bg};
+                color: {close_fg};
+                border: 1px solid {close_border};
+            }}
+            QPushButton:hover {{
+                background-color: rgba(225, 40, 40, 0.88);
+                color: #ffffff;
+            }}
+            QPushButton:pressed {{
+                background-color: rgba(180, 20, 20, 0.95);
+                color: #ffffff;
+            }}
+        """
+        self.btnClose.setStyleSheet(closeBtnStyle)
+
+    def _toggleMaximize(self):
+        if self._win.isFullScreen():
+            self._win._setNormalScreen()
+            self.btnMax.setText("□")
         else:
-            self._player.spectrumCtrl.stopCapture()
-            if not self._player.mpv.vid:
-                self._player.showImage(self._fallbackImage)
+            self._win._setFullscreen()
+            self.btnMax.setText("❐")
+
+
+SKIN_LIGHT_BG = "#FAF0E6"
+SKIN_LIGHT_BORDER = "#DDD0C4"
+SKIN_LIGHT_BORDER_INNER = "#E8DDD2"
+SKIN_LIGHT_SEP = "#D8C8BA"
+
+DARK_BG = "#222222"
+DARK_BORDER = "#333333"
+DARK_BORDER_INNER = "#2a2a2a"
+DARK_SEP = "#383838"
+
+def getToolbarWindowedStyle(theme="Dark"):
+    is_dark = (str(theme).lower() != "light")
+    bg = DARK_BG if is_dark else SKIN_LIGHT_BG
+    border = DARK_BORDER if is_dark else SKIN_LIGHT_BORDER
+    border_bottom = DARK_BORDER_INNER if is_dark else SKIN_LIGHT_BORDER_INNER
+    sep = DARK_SEP if is_dark else SKIN_LIGHT_SEP
+    hover = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(0, 0, 0, 0.08)"
+    pressed = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.16)"
+    return f"""
+        QToolBar {{
+            background-color: {bg};
+            border: 1px solid {border};
+            border-bottom: 1px solid {border_bottom};
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
+            border-bottom-left-radius: 0px;
+            border-bottom-right-radius: 0px;
+            spacing: 4px;
+            padding: 2px 6px;
+        }}
+        QToolBar::separator {{
+            background-color: {sep};
+            width: 1px;
+            margin: 6px 4px;
+        }}
+        QToolBar QToolButton {{
+            background: transparent;
+            border: none;
+            border-radius: 4px;
+            padding: 3px;
+        }}
+        QToolBar QToolButton:hover {{
+            background-color: {hover};
+        }}
+        QToolBar QToolButton:pressed {{
+            background-color: {pressed};
+        }}
+    """
+
+def getToolbarFullscreenStyle(theme="Dark"):
+    is_dark = (str(theme).lower() != "light")
+    bg = DARK_BG if is_dark else SKIN_LIGHT_BG
+    border = DARK_BORDER if is_dark else SKIN_LIGHT_BORDER
+    sep = DARK_SEP if is_dark else SKIN_LIGHT_SEP
+    hover = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(0, 0, 0, 0.08)"
+    pressed = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.16)"
+    return f"""
+        QToolBar {{
+            background-color: {bg};
+            border: 1px solid {border};
+            border-radius: 0px;
+            spacing: 4px;
+            padding: 2px 6px;
+        }}
+        QToolBar::separator {{
+            background-color: {sep};
+            width: 1px;
+            margin: 6px 4px;
+        }}
+        QToolBar QToolButton {{
+            background: transparent;
+            border: none;
+            border-radius: 4px;
+            padding: 3px;
+        }}
+        QToolBar QToolButton:hover {{
+            background-color: {hover};
+        }}
+        QToolBar QToolButton:pressed {{
+            background-color: {pressed};
+        }}
+    """
+
+def getSeekerRowWindowedStyle(theme="Dark"):
+    is_dark = (str(theme).lower() != "light")
+    bg = DARK_BG if is_dark else SKIN_LIGHT_BG
+    border = DARK_BORDER if is_dark else SKIN_LIGHT_BORDER
+    border_top = DARK_BORDER_INNER if is_dark else SKIN_LIGHT_BORDER_INNER
+    return f"""
+        QFrame#SeekerRow {{
+            background-color: {bg};
+            border-left: 1px solid {border};
+            border-right: 1px solid {border};
+            border-top: 1px solid {border_top};
+            border-bottom: none;
+        }}
+    """
+
+def getBottomBarWindowedStyle(theme="Dark"):
+    is_dark = (str(theme).lower() != "light")
+    bg = DARK_BG if is_dark else SKIN_LIGHT_BG
+    border = DARK_BORDER if is_dark else SKIN_LIGHT_BORDER
+    hover = "rgba(255, 255, 255, 0.12)" if is_dark else "rgba(0, 0, 0, 0.08)"
+    pressed = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.16)"
+    return f"""
+        QFrame#BottomBar {{
+            background-color: {bg};
+            border-left: 1px solid {border};
+            border-right: 1px solid {border};
+            border-bottom: 1px solid {border};
+            border-top: none;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 0px;
+            border-bottom-left-radius: 10px;
+            border-bottom-right-radius: 10px;
+        }}
+        QFrame#BottomBar QToolButton {{
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+        }}
+        QFrame#BottomBar QToolButton:hover {{
+            background-color: {hover};
+        }}
+        QFrame#BottomBar QToolButton:pressed {{
+            background-color: {pressed};
+        }}
+    """
+
+STYLE_TOOLBAR_WINDOWED = getToolbarWindowedStyle("Dark")
+STYLE_TOOLBAR_FULLSCREEN = getToolbarFullscreenStyle("Dark")
+STYLE_SEEKER_ROW_WINDOWED = getSeekerRowWindowedStyle("Dark")
+STYLE_BOTTOM_BAR_WINDOWED = getBottomBarWindowedStyle("Dark")
 
 
 class MainFrame(QtWidgets.QMainWindow):
@@ -753,28 +1301,23 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPlay.activated.connect(self.playVideo)
         self.playAction.triggered.connect(self.playVideo)
 
-        self.stopAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("stopAction")), 'Stop (pause and leave fullscreen)', self)
-        self.stopAction.triggered.connect(self.stopVideo)
-
         self.prevAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("prev")), 'Previous picture/video (Ctrl+Left)', self)
         self.prevAction.triggered.connect(self.player.prevTrack)
         self.prevAction.setEnabled(False)
+        self.prevAction.setVisible(False)
 
         self.nextAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("next")), 'Next picture/video (Ctrl+Right)', self)
         self.nextAction.triggered.connect(self.player.nextTrack)
         self.nextAction.setEnabled(False)
+        self.nextAction.setVisible(False)
 
         self.infoAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("infoAction")), 'Codec info (Crtl+I)', self)
         self.infoAction.setShortcut('Ctrl+I')
         self.infoAction.triggered.connect(self.showCodecInfo)
 
-        self.photoAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("photoAction")), 'Take screenshot (Crtl+P)', self)
-        self.photoAction.setShortcut('Ctrl+P')
-        self.photoAction.triggered.connect(self.takeScreenShot)
-
-        self.fsAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("fullscreen")), 'Fullscreen (F11 and ESC)', self)
+        self.fsAction = QtGui.QAction('Fullscreen (F11 and ESC)', self)
         self.fsAction.setShortcut('F11')
-        self.fsAction.triggered.connect(self._setFullscreen)
+        self.fsAction.triggered.connect(self._toggleFullscreen)
 
         self.mediaSettings = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("mediaSettings")), 'Settings', self)
         self.mediaSettings.setShortcut('Ctrl+T')
@@ -792,71 +1335,236 @@ class MainFrame(QtWidgets.QMainWindow):
         self.playlistPanelAction.setCheckable(True)
         self.playlistPanelAction.setShortcut('Ctrl+Shift+L')
         self.playlistPanelAction.toggled.connect(self.playlistPanel.setVisible)
+        self.playlistPanelAction.setVisible(False)
 
-        self.languagebox = QtWidgets.QComboBox()
-        self.languagebox.currentTextChanged.connect(self._onLanguageChanged)
-        self.languagebox.setToolTip("Select audio")
+        self.volumeWidget = QtWidgets.QWidget(self)
+        volLayout = QtWidgets.QHBoxLayout(self.volumeWidget)
+        volLayout.setContentsMargins(0, 0, 0, 0)
+        volLayout.setSpacing(4)
 
-        '''
-        self.eqAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("eq")), 'Spectrum analyzer', self)
-        self.eqAction.setCheckable(True)
-        self.eqAction.setChecked(self.settings.hasEQ())
-        self.eqAction.setEnabled(HAS_SPECTRUM)
-        self.eqAction.toggled.connect(self.settings.setEQ)
-        '''
-        
+        self._volIcons = {
+            "mute": makeCenteredEmojiIcon("🔇", size=38, font_size=38),
+            "low": makeCenteredEmojiIcon("🔉", size=38, font_size=38),
+            "high": makeCenteredEmojiIcon("🔊", size=38, font_size=38),
+        }
+
+        self.btnVolume = QtWidgets.QToolButton(self.volumeWidget)
+        self.btnVolume.setIcon(self._volIcons["high"])
+        self.btnVolume.setIconSize(QtCore.QSize(38, 38))
+        self.btnVolume.setFixedSize(38, 38)
+        self.btnVolume.setAutoRaise(True)
+        self.btnVolume.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: none;
+                padding: 0px;
+                border-radius: 6px;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 0.15);
+                border-radius: 6px;
+            }
+        """)
+        self.btnVolume.setToolTip("Mute / Unmute")
+        self.btnVolume.clicked.connect(self._toggleMute)
+        volLayout.addWidget(self.btnVolume)
+
+        self.volumeSlider = VolumeSlider(QtCore.Qt.Orientation.Horizontal, self.volumeWidget)
+        self.volumeSlider.setFixedWidth(100)
+        self.volumeSlider.setToolTip("Volume: 100%")
+        self.volumeSlider.valueChanged.connect(self._onVolumeChanged)
+        volLayout.addWidget(self.volumeSlider)
+
+        self.volumeWidget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+
         self.toolbar = self.addToolBar('Main')
+        self.toolbar.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.toolbar.setMovable(False)
+        self.toolbar.setFloatable(False)
+        self.toolbar.setIconSize(QtCore.QSize(28, 28))
         self.toolbar.addAction(self.loadAction)
         self.toolbar.addSeparator()
-        self.toolbar.addAction(self.prevAction)
-        self.toolbar.addAction(self.playAction)
-        self.toolbar.addAction(self.nextAction)
         self.toolbar.addAction(self.infoAction)
-        self.toolbar.addAction(self.photoAction)
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.mediaSettings)
-        self.toolbar.addWidget(self.languagebox)
         self.toolbar.addSeparator()
-        spacer = QtWidgets.QWidget()
-        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-        self.toolbar.addWidget(spacer)
-        self.toolbar.addAction(self.playlistPanelAction)
-        self.toolbar.addAction(self.fsAction)
 
-        color = self.toolbar.palette().color(QtGui.QPalette.ColorRole.Window)
-        bc = color.darker(120)
-        darker = color.darker(150)
-        lighter = color.lighter(140)
-        self.toolbar.setStyleSheet("QToolBar { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,stop: 0 %s, stop: 1.0 %s); border: 1px solid %s;}" % (darker.name(), lighter.name(), bc.name()))
+        # Brightness controls in top toolbar
+        self.brightnessWidget = QtWidgets.QWidget(self)
+        self.brightnessWidget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+        brightLayout = QtWidgets.QHBoxLayout(self.brightnessWidget)
+        brightLayout.setContentsMargins(4, 0, 4, 0)
+        brightLayout.setSpacing(4)
+
+        self.btnBrightness = QtWidgets.QToolButton(self.brightnessWidget)
+        self.btnBrightness.setIcon(makeCenteredEmojiIcon("☀️", size=36, font_size=36))
+        self.btnBrightness.setIconSize(QtCore.QSize(30, 30))
+        self.btnBrightness.setFixedSize(36, 36)
+        self.btnBrightness.setAutoRaise(True)
+        self.btnBrightness.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: none;
+                padding: 0px;
+                border-radius: 4px;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+            }
+        """)
+        self.btnBrightness.setToolTip("Reset brightness (0)")
+        self.btnBrightness.clicked.connect(lambda: self.brightnessSlider.setValue(0))
+        brightLayout.addWidget(self.btnBrightness)
+
+        self.brightnessSlider = BrightnessSlider(QtCore.Qt.Orientation.Horizontal, self.brightnessWidget)
+        self.brightnessSlider.setFixedWidth(100)
+        self.brightnessSlider.setToolTip("Brightness: 0 (Normal)")
+        self.brightnessSlider.valueChanged.connect(self._onBrightnessChanged)
+        brightLayout.addWidget(self.brightnessSlider)
+
+        self.toolbar.addWidget(self.brightnessWidget)
+
+        # Color temperature controls to the right of brightness slider
+        self.colorTempWidget = QtWidgets.QWidget(self)
+        self.colorTempWidget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+        ctLayout = QtWidgets.QHBoxLayout(self.colorTempWidget)
+        ctLayout.setContentsMargins(4, 0, 4, 0)
+        ctLayout.setSpacing(4)
+
+        self.btnColorTemp = QtWidgets.QToolButton(self.colorTempWidget)
+        self.btnColorTemp.setIcon(makeCenteredEmojiIcon("🌡️", size=36, font_size=24))
+        self.btnColorTemp.setIconSize(QtCore.QSize(30, 30))
+        self.btnColorTemp.setFixedSize(36, 36)
+        self.btnColorTemp.setAutoRaise(True)
+        self.btnColorTemp.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: none;
+                padding: 0px;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 0.15);
+                border-radius: 4px;
+            }
+        """)
+        self.btnColorTemp.setToolTip("Reset color temperature (6500K Normal)")
+        self.btnColorTemp.clicked.connect(lambda: self.colorTempSlider.setValue(ColorTempSlider.DEFAULT_TEMP))
+        ctLayout.addWidget(self.btnColorTemp)
+
+        self.colorTempSlider = ColorTempSlider(QtCore.Qt.Orientation.Horizontal, self.colorTempWidget)
+        self.colorTempSlider.setFixedWidth(100)
+        self.colorTempSlider.setToolTip("Color temp: 6500K (Normal)")
+        self.colorTempSlider.valueChanged.connect(self._onColorTempChanged)
+        ctLayout.addWidget(self.colorTempSlider)
+
+        self.toolbar.addWidget(self.colorTempWidget)
+
+        # Expanding drag spacers flanking the middle file name label on the top bar
+        spacerLeft = DragSpacer(self.toolbar)
+        self.toolbar.addWidget(spacerLeft)
+
+        self.ui_TitleLabel = ElidedTitleLabel(self.toolbar)
+        self.toolbar.addWidget(self.ui_TitleLabel)
+
+        spacerRight = DragSpacer(self.toolbar)
+        self.toolbar.addWidget(spacerRight)
+
+        self.windowControls = WindowControlGroup(self)
+        self.toolbar.addWidget(self.windowControls)
+        self._installDraggableToolbar()
+
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("QMainWindow { background: transparent; }")
+        self.toolbar.setStyleSheet(STYLE_TOOLBAR_WINDOWED)
+
+        # Bottom playback control bar (below the video slider)
+        self.ui_BottomBar = QtWidgets.QFrame()
+        self.ui_BottomBar.setObjectName("BottomBar")
+        self.ui_BottomBar.setStyleSheet(STYLE_BOTTOM_BAR_WINDOWED)
+        self.ui_BottomBar.setFixedHeight(46)
+        botLayout = QtWidgets.QHBoxLayout(self.ui_BottomBar)
+        botLayout.setContentsMargins(8, 2, 8, 2)
+        botLayout.setSpacing(10)
+
+        self.btnSpeed = QtWidgets.QToolButton(self.ui_BottomBar)
+        self.btnSpeed.setObjectName("btnSpeed")
+        self.btnSpeed.setText("1x")
+        self.btnSpeed.setFixedSize(48, 32)
+        self.btnSpeed.setAutoRaise(True)
+        self.btnSpeed.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.btnSpeed.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btnSpeed.setStyleSheet("""
+            QToolButton#btnSpeed {
+                font-size: 13px;
+                font-weight: bold;
+                color: #e0e0e0;
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                border-radius: 6px;
+                padding: 0;
+            }
+            QToolButton#btnSpeed:hover {
+                color: #ffffff;
+                background-color: rgba(255, 255, 255, 0.22);
+            }
+            QToolButton#btnSpeed:pressed {
+                background-color: rgba(255, 255, 255, 0.35);
+            }
+        """)
+        self.btnSpeed.setToolTip("Playback speed: 1x (click to cycle 1x, 1.5x, 2x)")
+        self.btnSpeed.clicked.connect(self._cycleSpeed)
+        botLayout.addWidget(self.btnSpeed)
+
+        botLayout.addStretch(1)
+
+        botLayout.addWidget(self.volumeWidget)
+        botLayout.addSpacing(18)
+
+        self.btnPlay = QtWidgets.QToolButton(self.ui_BottomBar)
+        self.btnPlay.setDefaultAction(self.playAction)
+        self.btnPlay.setIconSize(QtCore.QSize(28, 28))
+        self.btnPlay.setFixedSize(38, 38)
+        self.btnPlay.setAutoRaise(True)
+        botLayout.addWidget(self.btnPlay)
 
 
-        #The info row below:
-        self.ui_InfoRow = QtWidgets.QFrame()
-        self.ui_InfoRow.setStyleSheet("QFrame { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %s, stop:1 %s); border: 1px solid %s; }" % (darker.name(), lighter.name(), bc.name()))
-        fontM = QtGui.QFontMetrics(self.font())
-        self.ui_InfoRow.setFixedHeight(fontM.height() + round(fontM.height() * 0.5))
 
-        rowLayout = QtWidgets.QHBoxLayout(self.ui_InfoRow)
-        rowLayout.setContentsMargins(4, 0, 4, 0)
-        rowLayout.setSpacing(0)
+        # Seeker row with current/total timestamp on left, video seeker in center, and negative timestamp on right
+        self.ui_SeekerRow = QtWidgets.QFrame()
+        self.ui_SeekerRow.setObjectName("SeekerRow")
+        self.ui_SeekerRow.setStyleSheet(STYLE_SEEKER_ROW_WINDOWED)
+        self.ui_SeekerRow.setFixedHeight(34)
 
-        self.ui_NowPlaying = QtWidgets.QLabel()
-        self.ui_NowPlaying.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-        self.ui_NowPlaying.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft)
-        self.ui_NowPlaying.setStyleSheet("QLabel { background: transparent; border: none; }")
+        seekerLayout = QtWidgets.QHBoxLayout(self.ui_SeekerRow)
+        seekerLayout.setContentsMargins(10, 0, 10, 0)
+        seekerLayout.setSpacing(8)
 
-        self.ui_InfoLabel = QtWidgets.QLabel(self)
-        self.ui_InfoLabel.setStyleSheet("QLabel { background: transparent; border: none; }")
-        self.ui_InfoLabel.setText("0")
+        self.ui_InfoLabel = QtWidgets.QLabel(self.ui_SeekerRow)
+        self.ui_InfoLabel.setStyleSheet("QLabel { background: transparent; border: none; color: #d0d0d0; font-size: 11px; font-weight: 500; }")
+        self.ui_InfoLabel.setText("00:00 / 00:00")
         self.ui_InfoLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignRight)
-        self.ui_InfoLabel.setToolTip("Infos about the media position")
-        rowLayout.addWidget(self.ui_NowPlaying)
-        rowLayout.addWidget(self.ui_InfoLabel)
+        self.ui_InfoLabel.setToolTip("Current position / Total duration")
+        seekerLayout.addWidget(self.ui_InfoLabel)
 
         self._createSlider()
+        seekerLayout.addWidget(self.ui_Slider, stretch=1)
+
+        self.ui_RemainingLabel = QtWidgets.QLabel(self.ui_SeekerRow)
+        self.ui_RemainingLabel.setStyleSheet("QLabel { background: transparent; border: none; color: #d0d0d0; font-size: 11px; font-weight: 500; }")
+        self.ui_RemainingLabel.setText("-00:00")
+        self.ui_RemainingLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.ui_RemainingLabel.setToolTip("Remaining time")
+        seekerLayout.addWidget(self.ui_RemainingLabel)
+
+        self.ui_InfoRow = self.ui_SeekerRow
+        self.ui_NowPlaying = QtWidgets.QLabel()
        
         self._mainBox = self._makeLayout()
         wid = QtWidgets.QWidget(self)
+        wid.setObjectName("CentralWidget")
+        wid.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        wid.setStyleSheet("QWidget#CentralWidget { background: transparent; }")
         self.setCentralWidget(wid)
         wid.setLayout(self._mainBox)
         self.resize(1024, 640)
@@ -864,25 +1572,227 @@ class MainFrame(QtWidgets.QMainWindow):
         # F11 Shortcut is defined in the fullscreen action
         QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Escape), self, activated=self._setNormalScreen)
         self.osdCtrl = OsdController(self.player,
-            (self.prevAction, self.playAction, self.stopAction, self.nextAction))
+            (self.prevAction, self.playAction, self.nextAction, self.fsAction))
+        self.player._osdOverlay = self.osdCtrl._overlay
+        self.player.videoSurfaceTapped.connect(self._onVideoSurfaceTapped)
         self.player.mouseActive.connect(self.osdCtrl.wake)
         self.player.overlayRaised.connect(self.osdCtrl.raiseToTop)
         self.player.triggerInitialized.connect(self._showIdleIcon)
         self.player.onError.connect(self._onPlayerError)
+        self.player.volumeChanged.connect(self._onPlayerVolumeChanged)
+        self._onPlayerVolumeChanged(self.player.getVolume(), self.player.isMuted())
+        self.player.brightnessChanged.connect(self._onPlayerBrightnessChanged)
+        self._onPlayerBrightnessChanged(self.player.getBrightness())
+        self.player.colorTempChanged.connect(self._onPlayerColorTempChanged)
+        self._onPlayerColorTempChanged(self.player.getColorTemperature())
+        self.player.speedChanged.connect(self._onPlayerSpeedChanged)
+        self._onPlayerSpeedChanged(self.player.getSpeed())
+        self.applyTheme(self.settings.getTheme())
 
-    def takeScreenShot(self):
-        self.player.takeScreenShot()
+    @pyqtSlot(str)
+    def _onThemeChanged(self, theme):
+        self.applyTheme(theme)
+
+    def applyTheme(self, theme="Dark"):
+        theme = IconMapper._normalizeTheme(theme)
+        is_dark = (theme == "Dark")
+        ICOMAP.setTheme(theme)
+
+        # 1. Update toolbar and bottom bars
+        if getattr(self, '_fullscreen', False):
+            self.toolbar.setStyleSheet(getToolbarFullscreenStyle(theme))
+        else:
+            self.toolbar.setStyleSheet(getToolbarWindowedStyle(theme))
+            self.ui_SeekerRow.setStyleSheet(getSeekerRowWindowedStyle(theme))
+            self.ui_BottomBar.setStyleSheet(getBottomBarWindowedStyle(theme))
+
+        # 2. Update Actions icons
+        if hasattr(self, 'loadAction'):
+            self.loadAction.setIcon(QtGui.QIcon(ICOMAP.ico("loadAction")))
+            self.prevAction.setIcon(QtGui.QIcon(ICOMAP.ico("prev")))
+            self.nextAction.setIcon(QtGui.QIcon(ICOMAP.ico("next")))
+            self.infoAction.setIcon(QtGui.QIcon(ICOMAP.ico("infoAction")))
+            self.mediaSettings.setIcon(QtGui.QIcon(ICOMAP.ico("mediaSettings")))
+            self.playlistPanelAction.setIcon(QtGui.QIcon(ICOMAP.ico("playlistPanel")))
+            playing = hasattr(self, 'player') and hasattr(self.player, 'isPlaying') and self.player.isPlaying()
+            self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause" if playing else "playStart")))
+
+        # 3. Update Volume icons and button
+        vol_normal = "#e0e0e0" if is_dark else "#222222"
+        vol_active = "#ffffff" if is_dark else "#000000"
+        self._volIcons = {
+            "mute": makeCenteredEmojiIcon("🔇", size=38, font_size=38, normal_color=vol_normal, active_color=vol_active),
+            "low": makeCenteredEmojiIcon("🔉", size=38, font_size=38, normal_color=vol_normal, active_color=vol_active),
+            "high": makeCenteredEmojiIcon("🔊", size=38, font_size=38, normal_color=vol_normal, active_color=vol_active),
+        }
+        if hasattr(self, 'btnVolume'):
+            vol = getattr(self.player, 'volume', 100) or 0
+            is_muted = getattr(self.player, 'isMuted', lambda: False)()
+            if is_muted or vol == 0:
+                self.btnVolume.setIcon(self._volIcons["mute"])
+            elif vol < 50:
+                self.btnVolume.setIcon(self._volIcons["low"])
+            else:
+                self.btnVolume.setIcon(self._volIcons["high"])
+
+            hover_bg = "rgba(255, 255, 255, 0.15)" if is_dark else "rgba(0, 0, 0, 0.08)"
+            self.btnVolume.setStyleSheet(f"""
+                QToolButton {{
+                    background: transparent;
+                    border: none;
+                    padding: 0px;
+                    border-radius: 6px;
+                }}
+                QToolButton:hover {{
+                    background: {hover_bg};
+                    border-radius: 6px;
+                }}
+            """)
+
+        # 4. Sun & Color temperature buttons
+        tool_hover_bg = "rgba(255, 255, 255, 0.15)" if is_dark else "rgba(0, 0, 0, 0.08)"
+        tool_btn_style = f"""
+            QToolButton {{
+                background: transparent;
+                border: none;
+                padding: 0px;
+                border-radius: 4px;
+            }}
+            QToolButton:hover {{
+                background: {tool_hover_bg};
+                border-radius: 4px;
+            }}
+        """
+        if hasattr(self, 'btnBrightness'):
+            self.btnBrightness.setIcon(makeCenteredEmojiIcon("☀️", size=36, font_size=36, normal_color=vol_normal, active_color=vol_active))
+            self.btnBrightness.setIconSize(QtCore.QSize(30, 30))
+            self.btnBrightness.setStyleSheet(tool_btn_style)
+
+        if hasattr(self, 'btnColorTemp'):
+            self.btnColorTemp.setIcon(makeCenteredEmojiIcon("🌡️", size=36, font_size=24, normal_color=vol_normal, active_color=vol_active))
+            self.btnColorTemp.setIconSize(QtCore.QSize(30, 30))
+            self.btnColorTemp.setStyleSheet(tool_btn_style)
+
+        # 5. Speed button
+        if hasattr(self, 'btnSpeed'):
+            speed_fg = "#e0e0e0" if is_dark else "#222222"
+            speed_bg = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(0, 0, 0, 0.06)"
+            speed_border = "rgba(255, 255, 255, 0.16)" if is_dark else "rgba(0, 0, 0, 0.15)"
+            speed_hover_fg = "#ffffff" if is_dark else "#000000"
+            speed_hover_bg = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.12)"
+            speed_pressed_bg = "rgba(255, 255, 255, 0.35)" if is_dark else "rgba(0, 0, 0, 0.20)"
+            self.btnSpeed.setStyleSheet(f"""
+                QToolButton#btnSpeed {{
+                    font-size: 13px;
+                    font-weight: bold;
+                    color: {speed_fg};
+                    background-color: {speed_bg};
+                    border: 1px solid {speed_border};
+                    border-radius: 6px;
+                    padding: 0;
+                }}
+                QToolButton#btnSpeed:hover {{
+                    color: {speed_hover_fg};
+                    background-color: {speed_hover_bg};
+                }}
+                QToolButton#btnSpeed:pressed {{
+                    background-color: {speed_pressed_bg};
+                }}
+            """)
+
+        # 6. Labels
+        if hasattr(self, 'ui_TitleLabel'):
+            title_color = "#e0e0e0" if is_dark else "#222222"
+            self.ui_TitleLabel.setStyleSheet(f"QLabel {{ color: {title_color}; font-size: 13px; font-weight: 500; background: transparent; padding: 0 8px; }}")
+
+        time_color = "#d0d0d0" if is_dark else "#444444"
+        time_style = f"QLabel {{ background: transparent; border: none; color: {time_color}; font-size: 11px; font-weight: 500; }}"
+        if hasattr(self, 'ui_InfoLabel'):
+            self.ui_InfoLabel.setStyleSheet(time_style)
+        if hasattr(self, 'ui_RemainingLabel'):
+            self.ui_RemainingLabel.setStyleSheet(time_style)
+
+        # 7. Window controls
+        if hasattr(self, 'windowControls'):
+            self.windowControls.setTheme(theme)
+
+        # 8. Sliders
+        if hasattr(self, 'ui_Slider') and hasattr(self.ui_Slider, 'setTheme'):
+            self.ui_Slider.setTheme(theme)
+        if hasattr(self, 'volumeSlider') and hasattr(self.volumeSlider, 'setTheme'):
+            self.volumeSlider.setTheme(theme)
+        if hasattr(self, 'brightnessSlider') and hasattr(self.brightnessSlider, 'setTheme'):
+            self.brightnessSlider.setTheme(theme)
+        if hasattr(self, 'colorTempSlider') and hasattr(self.colorTempSlider, 'setTheme'):
+            self.colorTempSlider.setTheme(theme)
+
+        # 9. Playlist panel
+        if hasattr(self, 'playlistPanel') and hasattr(self.playlistPanel, 'updateIcons'):
+            self.playlistPanel.updateIcons()
+
+        # 10. OSD Overlay
+        if hasattr(self, 'osdCtrl') and self.osdCtrl and getattr(self.osdCtrl, '_overlay', None):
+            self.osdCtrl._overlay.setTheme(theme)
 
     def _openMediaSettings(self):
         dlg = SettingsDialog(self, self.settings)
         dlg.show()
 
+    def _installDraggableToolbar(self):
+        origPress = self.toolbar.mousePressEvent
+        origDbl = self.toolbar.mouseDoubleClickEvent
+
+        def onToolbarPress(event):
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                if not self._fullscreen:
+                    wh = self.windowHandle()
+                    if wh is not None:
+                        wh.startSystemMove()
+                        event.accept()
+                        return
+            origPress(event)
+
+        def onToolbarDbl(event):
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                if self._fullscreen:
+                    self._setNormalScreen()
+                else:
+                    self._setFullscreen()
+                event.accept()
+                return
+            origDbl(event)
+
+        self.toolbar.mousePressEvent = onToolbarPress
+        self.toolbar.mouseDoubleClickEvent = onToolbarDbl
+
+    def changeEvent(self, event):
+        if event.type() == QtCore.QEvent.Type.WindowStateChange:
+            is_fs = self.isFullScreen() or getattr(self, '_fullscreen', False)
+            if hasattr(self, 'windowControls'):
+                self.windowControls.btnMax.setText("❐" if is_fs else "□")
+        super().changeEvent(event)
+
+    def _toggleFullscreen(self):
+        if self._fullscreen:
+            self._setNormalScreen()
+        else:
+            self._setFullscreen()
+
     def _setFullscreen(self):
         if not self._fullscreen:
             self._panelWasVisible = self.playlistPanel.isVisible()
-            self.toolbar.hide()
             self.playlistPanel.hide()
-            self.osdCtrl.takeWidgets(self.ui_InfoRow, self.ui_Slider)
+            self.ui_SeekerRow.setStyleSheet("QFrame#SeekerRow { background: transparent; border: none; }")
+            self.ui_BottomBar.setStyleSheet("QFrame#BottomBar { background: transparent; border: none; }")
+            self.osdCtrl.takeWidgets(self.ui_SeekerRow, self.ui_BottomBar)
+            self.toolbar.setParent(self.player)
+            self.toolbar.hide()
+            theme = self.settings.getTheme()
+            self.toolbar.setStyleSheet(getToolbarFullscreenStyle(theme))
+            self.osdCtrl.setTopBar(self.toolbar)
+            self.player._osdTopBar = self.toolbar
+            if hasattr(self, 'windowControls'):
+                self.windowControls.btnMax.setText("❐")
             self._fullscreen = True
             self.showFullScreen()
             self.player.setCursor(QtCore.Qt.CursorShape.BlankCursor)
@@ -893,11 +1803,18 @@ class MainFrame(QtWidgets.QMainWindow):
     def _setNormalScreen(self):
         if self._fullscreen:
             self.osdCtrl.disable()
+            self.osdCtrl.setTopBar(None)
+            self.player._osdTopBar = None
+            self.addToolBar(QtCore.Qt.ToolBarArea.TopToolBarArea, self.toolbar)
+            self.toolbar.show()
             for widget in self.osdCtrl.releaseWidgets():
                 self._mainBox.addWidget(widget)
-            self.toolbar.show()
-            self.ui_InfoRow.show()
-            self.ui_Slider.show()
+            theme = self.settings.getTheme()
+            self.toolbar.setStyleSheet(getToolbarWindowedStyle(theme))
+            self.ui_SeekerRow.setStyleSheet(getSeekerRowWindowedStyle(theme))
+            self.ui_BottomBar.setStyleSheet(getBottomBarWindowedStyle(theme))
+            self.ui_SeekerRow.show()
+            self.ui_BottomBar.show()
             self._fullscreen = False
             self.showNormal()
             self.player.restoreCursor()
@@ -905,21 +1822,96 @@ class MainFrame(QtWidgets.QMainWindow):
             self.playlistPanelAction.setChecked(self._panelWasVisible)
             self.playlistPanelAction.blockSignals(False)
             self.playlistPanel.setVisible(self._panelWasVisible)
+            if hasattr(self, 'windowControls'):
+                self.windowControls.btnMax.setText("□")
 
-    def _onLanguageChanged(self, text):
-        if len(text) == 0:
-            return  # when cleared again...
-        idx = self.audioMapping.get(text, (0, 0))
-        self.player.setAudio(idx[0])
-        if self.settings.hasSubtitles():
-            self._onSubtitleChanged(True)
+    def _onVideoSurfaceTapped(self, was_osd_visible):
+        if self._fullscreen:
+            now = time.time()
+            if (now - getattr(self, '_lastTapToggleTime', 0)) < 0.4:
+                return
+            self._lastTapToggleTime = now
+            if was_osd_visible:
+                self.osdCtrl.hide()
+            else:
+                self.osdCtrl.show()
+
+    def _onVolumeChanged(self, val):
+        self.player.setVolume(val)
+
+    def _toggleMute(self):
+        muted = not self.player.isMuted()
+        if not muted and self.player.getVolume() == 0:
+            self.player.setVolume(100)
+        self.player.setMuted(muted)
+
+    def _onPlayerVolumeChanged(self, vol, is_muted):
+        self.volumeSlider.blockSignals(True)
+        self.volumeSlider.setValue(vol)
+        self.volumeSlider.blockSignals(False)
+        self.volumeSlider.setToolTip(f"Volume: {vol}%")
+        if is_muted or vol == 0:
+            self.btnVolume.setIcon(self._volIcons["mute"])
+        elif vol < 50:
+            self.btnVolume.setIcon(self._volIcons["low"])
+        else:
+            self.btnVolume.setIcon(self._volIcons["high"])
+
+    def _onBrightnessChanged(self, val):
+        self.player.setBrightness(val)
+
+    def _onPlayerBrightnessChanged(self, val):
+        if hasattr(self, 'brightnessSlider'):
+            self.brightnessSlider.blockSignals(True)
+            self.brightnessSlider.setValue(val)
+            self.brightnessSlider.blockSignals(False)
+            if val == 0:
+                self.brightnessSlider.setToolTip("Brightness: 0 (Normal)")
+            elif val > 0:
+                self.brightnessSlider.setToolTip(f"Brightness: +{val}")
+            else:
+                self.brightnessSlider.setToolTip(f"Brightness: {val}")
+
+    def _onColorTempChanged(self, val):
+        self.player.setColorTemperature(val)
+
+    def _onPlayerColorTempChanged(self, val):
+        if hasattr(self, 'colorTempSlider'):
+            self.colorTempSlider.blockSignals(True)
+            self.colorTempSlider.setValue(val)
+            self.colorTempSlider.blockSignals(False)
+            if val == ColorTempSlider.DEFAULT_TEMP:
+                self.colorTempSlider.setToolTip("Color temp: 6500K (Normal)")
+            elif val < ColorTempSlider.DEFAULT_TEMP:
+                self.colorTempSlider.setToolTip(f"Color temp: {val}K (Warm)")
+            else:
+                self.colorTempSlider.setToolTip(f"Color temp: {val}K (Cool)")
+
+    SPEED_OPTIONS = (1.0, 1.5, 2.0)
+
+    def _cycleSpeed(self):
+        curr = self.player.getSpeed()
+        idx = 0
+        min_diff = float('inf')
+        for i, s in enumerate(self.SPEED_OPTIONS):
+            diff = abs(curr - s)
+            if diff < min_diff:
+                min_diff = diff
+                idx = i
+        next_idx = (idx + 1) % len(self.SPEED_OPTIONS)
+        self.player.setSpeed(self.SPEED_OPTIONS[next_idx])
+
+    def _onPlayerSpeedChanged(self, speed):
+        if hasattr(self, 'btnSpeed'):
+            rounded = round(float(speed), 2)
+            text = f"{rounded:g}x"
+            self.btnSpeed.setText(text)
+            self.btnSpeed.setToolTip(f"Playback speed: {text} (click to cycle 1x, 1.5x, 2x)")
         
     def _prepareNextStream(self, streamData):
         self.player.hideImage()
         isAudio = self.player.isAudioOnly
         isVideo = not isAudio
-        self.languagebox.setEnabled(isVideo)
-        self.photoAction.setEnabled(isVideo)
         hasPlaylist = self.player.isPlaylist and len(self.player.mpv.playlist) > 1
         self._setNavEnabled(hasPlaylist)
         if not hasPlaylist:
@@ -931,14 +1923,11 @@ class MainFrame(QtWidgets.QMainWindow):
                 pass
         path = self.player.mpv.path
         if path and self.slideshowCtrl.isPicture(path):
-            self.player.spectrumCtrl.stopCapture()
             self.slideshowCtrl.onTrackChanged(path)
             self.playback.onItemLoaded()
             return
         if isAudio:
             self.audioDisplayCtrl.update()
-        else:
-            self.player.spectrumCtrl.stopCapture()
         if isVideo:
             self._updateLang(streamData)
             if self.settings.hasSubtitles():
@@ -947,12 +1936,9 @@ class MainFrame(QtWidgets.QMainWindow):
 
 
     def _updateLang(self, streamData):
-        self.languagebox.blockSignals(True)
-        self.languagebox.clear()
         if not streamData:
             self.audioMapping = {}
             self.audioMapping["Mute"] = (0, 0)
-            self.languagebox.addItem("Mute")
         else:
             self.audioMapping = streamData.getLanguageMapping()
             audioCount = len(streamData.allAudioStreams())
@@ -960,32 +1946,20 @@ class MainFrame(QtWidgets.QMainWindow):
             akeys = [k for k in self.audioMapping.keys() if self.audioMapping[k][0] >= 0 ]
             if len(akeys) == 1 and audioCount > 0:
                 self.audioMapping["AudioPlay"] = (1, 0)
-                akeys = ["AudioPlay", "Mute"]
-
-            self.languagebox.addItems(akeys)
-        self.languagebox.blockSignals(False)
 
     # #settings callback 1
     def _onSubtitleChanged(self, isSelected):
         if self.audioMapping:
             idx = (0, 0)
             if isSelected:
-                txt = self.languagebox.currentText()
-                idx = self.audioMapping.get(txt, (0, 0))
+                for k, v in self.audioMapping.items():
+                    if k != "Mute":
+                        idx = v
+                        break
             self.player.setSubtitles(max(0, idx[1]))  # negative means - no subtitle here
 
-    # #settings callback 2
-    def _onEQChanged(self, isSelected):
-        self.audioDisplayCtrl.update()
-
-    def _onSpectrumModeChanged(self, mode):
-        self.player.spectrumCtrl.setMode(mode)
-
     def _createSlider(self):
-        self.ui_Slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        # contribution:
-        self.ui_Slider.setStyleSheet(stylesheet())
-        
+        self.ui_Slider = VideoSlider(QtCore.Qt.Orientation.Horizontal)
         self.ui_Slider.setMinimum(0)
         self.ui_Slider.setMaximum(self.SLIDER_RESOLUTION)
         self.ui_Slider.setToolTip("Time track")
@@ -1006,8 +1980,10 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPageDown.activated.connect(lambda: self.player.seekRelative(-60))        
 
     def _showIdleIcon(self):
-        iconPath = FFMPEGTools.OSTools().joinPathes(FFMPEGTools.OSTools().getWorkingDirectory(), "icons", "easyPlay.png")
+        iconPath = FFMPEGTools.OSTools().joinPathes(FFMPEGTools.OSTools().getWorkingDirectory(), "icons", "icon.png")
         self.player.showImage(iconPath)
+        if hasattr(self, '_updateTimeLabels'):
+            self._updateTimeLabels(0)
 
     def _makeLayout(self):
         mainBox = QtWidgets.QVBoxLayout()
@@ -1018,8 +1994,8 @@ class MainFrame(QtWidgets.QMainWindow):
         contentRow.addWidget(self.player, stretch=1)
         contentRow.addWidget(self.playlistPanel)
         mainBox.addLayout(contentRow)
-        mainBox.addWidget(self.ui_InfoRow)
-        mainBox.addWidget(self.ui_Slider)
+        mainBox.addWidget(self.ui_SeekerRow)
+        mainBox.addWidget(self.ui_BottomBar)
         return mainBox
      
     def centerWindow(self):
@@ -1066,25 +2042,20 @@ class MainFrame(QtWidgets.QMainWindow):
                 return
             self._playFolderOf(fn)
             return
-        except:
+        except Exception:
             self._showIdleIcon()
             self.getErrorDialog("Invalid file", "%s is not a known media file" % (fn), "-").show()
     
     def _playFolderOf(self, fn):
-        """Opened from the file manager: show this one file, but queue its whole
-        folder tree so next/prev work. Nothing advances until play is pressed."""
-        paths = self.playlistManager.scanTree(fn)
-        if fn not in paths:
-            paths = [fn]
-        idx = paths.index(fn)
-        root = OSTools().getDirectory(fn)
-        name = OSTools().getFileNameOnly(root)
-        self.playlistPanel.setTracks(paths, name, sourcePath=None, rootDir=root)
+        """Play only the single opened file directly without folder scanning or playlist."""
+        paths = [fn]
+        name = OSTools().getFileNameOnly(fn)
+        self.playlistPanel.setTracks(paths, name, sourcePath=None, rootDir=None)
+        self.playlistPanel.hide()
         self._panelDirty = False
-        self.player.isPlaylist = True
-        # browse mode: once loaded, the item decides - a video plays once, a still holds
-        self.playback.setInitial(playing=False, follow=False)
-        self.asyncPlay(lambda: self.player.startPlayingList(paths, idx))
+        self.player.isPlaylist = False
+        self.playback.setInitial(playing=True, follow=False)
+        self.asyncPlay(lambda: self.player.startPlayingList(paths, 0))
 
     def _setNavEnabled(self, enabled):
         """next/prev live in the toolbar and in the playlist panel - keep them in sync"""
@@ -1127,12 +2098,9 @@ class MainFrame(QtWidgets.QMainWindow):
         if isPlaying:
             self.__enableActionsOnVideoPlay(False)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause")))
-            if self.player.isAudioOnly and not HAS_SPECTRUM:
-                self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
         else:
             self.__enableActionsOnVideoPlay(True)
-            self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))
-            self.player.spectrumCtrl.stopCapture()             
+            self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))             
 
     # manual slider - sync with gui    
     def _onSliderPressed(self):
@@ -1141,36 +2109,60 @@ class MainFrame(QtWidgets.QMainWindow):
     def _onSliderReleased(self):
         QtCore.QTimer.singleShot(400, lambda: setattr(self, '_sliderSeeking', False))
 
-    def _onSliderMoved(self, pos):
-        if self.player.streamData:
-            dur = self.player.duration
+    def _updateTimeLabels(self, timepos):
+        dur = getattr(self.player, 'duration', 0) or 0
+        has_hours = (dur >= 3600) or ((timepos or 0) >= 3600)
+
+        s = max(0, int(timepos or 0))
+        dur_sec = max(0, int(round(dur)))
+
+        if has_hours:
+            ts = '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
+            dur_str = getattr(self.player, 'durString', None)
+            if not dur_str or dur_sec >= 3600:
+                dur_str = '{:02}:{:02}:{:02}'.format(dur_sec // 3600, dur_sec % 3600 // 60, dur_sec % 60)
+            rem_sec = max(0, int(round(dur - (timepos or 0)))) if dur > 0 else 0
+            rem_ts = '-{:02}:{:02}:{:02}'.format(rem_sec // 3600, rem_sec % 3600 // 60, rem_sec % 60)
         else:
-            dur = 0
+            ts = '{:02}:{:02}'.format(s // 60, s % 60)
+            dur_str = getattr(self.player, 'durString', None)
+            if not dur_str or dur_sec < 3600:
+                dur_str = '{:02}:{:02}'.format(dur_sec // 60, dur_sec % 60)
+            rem_sec = max(0, int(round(dur - (timepos or 0)))) if dur > 0 else 0
+            rem_ts = '-{:02}:{:02}'.format(rem_sec // 60, rem_sec % 60)
+
+        if hasattr(self, 'ui_InfoLabel'):
+            self.ui_InfoLabel.setText(f"{ts} / {dur_str}")
+
+        if hasattr(self, 'ui_RemainingLabel'):
+            self.ui_RemainingLabel.setText(rem_ts)
+
+    def _onSliderMoved(self, pos):
+        dur = getattr(self.player, 'duration', 0) or 0
         if dur == 0:
             relpos = 0
         else:
             relpos = pos / self.SLIDER_RESOLUTION * dur 
         self.player.asyncSeek(relpos)
+        self._updateTimeLabels(relpos)
     
     # running stream - sync with slider
     @pyqtSlot(float)
     def _onSyncSlider(self, timepos):
-        if timepos == self.ui_Slider.value():
-            return
         if self._sliderSeeking or self.slideshowCtrl.isActive():
             return
         if not self.ui_Slider.isSliderDown():
-            self.ui_Slider.blockSignals(True)
-            dur = self.player.duration
-            if dur == 0:
-                sliderPos = 0
-            else:
-                sliderPos = self.SLIDER_RESOLUTION * timepos / dur
-            self.ui_Slider.setSliderPosition(int(sliderPos))
-            self.ui_Slider.blockSignals(False)
-        s = int(timepos)
-        ts = '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
-        self.ui_InfoLabel.setText(ts + "  \u25C6  " + self.player.durString)
+            dur = getattr(self.player, 'duration', 0) or 0
+            if dur > 0:
+                if self.player.isEOF() or (dur - timepos) < 0.15:
+                    sliderPos = self.SLIDER_RESOLUTION
+                    timepos = dur
+                else:
+                    sliderPos = self.SLIDER_RESOLUTION * timepos / dur
+                self.ui_Slider.blockSignals(True)
+                self.ui_Slider.setValue(int(sliderPos))
+                self.ui_Slider.blockSignals(False)
+        self._updateTimeLabels(timepos)
     
     @pyqtSlot(str)
     def _onPlayerError(self, errorMsg):
@@ -1189,13 +2181,11 @@ class MainFrame(QtWidgets.QMainWindow):
         self.player.playlistTrackChanged.connect(self._onTitleChanged)
         self.player.playlistTrackChanged.connect(lambda _: self.playlistPanel.highlightIndex(self.player.mpv.playlist_pos))
         self.player.playlistTrackChanged.connect(self._onTrackChanged)
-        self.settings.changeEQ.connect(self._onEQChanged)
         self.settings.changeSub.connect(self._onSubtitleChanged)
-        self.settings.changeSpectrum.connect(self._onSpectrumModeChanged)
         self.settings.changeSlideDuration.connect(self.slideshowCtrl.onSlideDurationChanged)
+        self.settings.changeTheme.connect(self._onThemeChanged)
         self.slideshowCtrl.slideEnded.connect(self.playback.onItemEnded)
         self.player.itemEnded.connect(self.playback.onItemEnded)
-        self.player.spectrumCtrl.setMode(self.settings.getSpectrumMode())
         self.playlistPanel.requestPlay.connect(self._onPlaylistPlay)
         self.playlistPanel.requestPrev.connect(self.player.prevTrack)
         self.playlistPanel.requestNext.connect(self.player.nextTrack)
@@ -1337,7 +2327,7 @@ class MainFrame(QtWidgets.QMainWindow):
             </tr>
             </table>""" % (container.formatNames()[0], container.getBitRate(), container.getSizeKB() / 1024, streamData.isTransportStream(),isInterlaced, codec, w, h, ar, fr, ts, acodec)
 
-        except:
+        except Exception:
             Log.exception("Invalid codec format")
             textDS = "<br> File is broken. Please select a valid file" #No idea how this can happen. 
         self.__getInfoDialog(textDS).show()
@@ -1373,22 +2363,26 @@ class MainFrame(QtWidgets.QMainWindow):
         self.setWindowLabel(FFMPEGTools.OSTools().getFileNameOnly(fnName))
 
     def setWindowLabel(self, text):
-        self.setWindowTitle(AppName + " - " + text)
+        title = (AppName + " - " + text) if text else AppName
+        self.setWindowTitle(title)
+        if hasattr(self, 'ui_TitleLabel'):
+            self.ui_TitleLabel.setText(text)
 
     def _onTitleChanged(self, title):
         """Follow the media title - it falls back to the file name when a track
         carries no metadata. Streams are skipped: their ICY updates would rewrite
         the title on every song. Those still reach ui_NowPlaying."""
-        path = self.player.mpv.path
+        path = getattr(self.player.mpv, 'path', None) if (hasattr(self, 'player') and self.player and hasattr(self.player, 'mpv') and self.player.mpv) else None
         if not path or '://' in path or not title:
             return
         self.setWindowLabel(title)
 
     def closeEvent(self, __event: QCloseEvent) -> None:
         self.player.closePending = True
-        self.player.spectrumCtrl.stopCapture()  # stop parec thread before Qt destroys child widgets
         if self.playlistThread is not None:
             self.playlistThread.wait(3000)
+        self.player.close()
+        super().closeEvent(__event)
 
 
 class Worker(QThread):
@@ -1412,37 +2406,32 @@ class Worker(QThread):
 
 class SettingsModel(QtCore.QObject):
     changeSub = pyqtSignal(object)
-    changeEQ = pyqtSignal(object)
-    changeSpectrum = pyqtSignal(str)
     changeSlideDuration = pyqtSignal(int)
+    changeTheme = pyqtSignal(str)
 
     def __init__(self, mainframe):
         # keep flags- save them later
         super(SettingsModel, self).__init__()
-        self.iconSet = ep_config.get("icoSet", IconMapper.DEFAULT)
-        self.showEQ = ep_config.getBoolean("showEQ", True)
+        global ep_config
+        if ep_config is None:
+            ep_config = ConfigAccessor(AppName, "ep.ini")
+            ep_config.read()
+        self.iconSet = IconMapper._normalizeTheme(ep_config.get("theme", ep_config.get("icoSet", IconMapper.DEFAULT)))
         self.mainFrame = mainframe
         self.showSubs = ep_config.getBoolean("subtitles", False)  # id if subtitle should be presented. mpv only
-        self.spectrumMode = ep_config.get("spectrumMode", "heat")
         self.softwareRender = ep_config.getBoolean("softwareRender", False)
         self.slideDuration = ep_config.getInt("slideDuration", SLIDE_DURATION)
         self.isoCodes = []
     
     def sync(self):
-        if self.showEQ:
-            ep_config.set("showEQ", "True")
-        else:
-            ep_config.set("showEQ", "False")
-        
         if self.showSubs:
             ep_config.set("subtitles", "True")
         else:
             ep_config.set("subtitles", "False")
         
-        ep_config.set("spectrumMode", self.spectrumMode)
         ep_config.set("softwareRender", str(self.softwareRender))
         ep_config.set("slideDuration", str(self.slideDuration))
-        # SET the icoset
+        ep_config.set("theme", self.iconSet)
         ep_config.set("icoSet", self.iconSet)
         
     def __update(self):
@@ -1451,14 +2440,6 @@ class SettingsModel(QtCore.QObject):
         
     def hasSubtitles(self):
         return self.showSubs
-    
-    def hasEQ(self):
-        return self.showEQ
-
-    def setEQ(self, aBool):
-        self.showEQ = aBool
-        self.__update()
-        self.changeEQ.emit(aBool)
         
     def setSubtitle(self, aBool):
         self.showSubs = aBool
@@ -1466,16 +2447,16 @@ class SettingsModel(QtCore.QObject):
         self.changeSub.emit(aBool)   
         
     def setIconSet(self, icoType):
-        self.iconSet = icoType
+        normalized = IconMapper._normalizeTheme(icoType)
+        self.iconSet = normalized
         self.__update()
+        self.changeTheme.emit(self.iconSet)
 
-    def getSpectrumMode(self):
-        return self.spectrumMode
+    def setTheme(self, theme):
+        self.setIconSet(theme)
 
-    def setSpectrumMode(self, mode):
-        self.spectrumMode = mode
-        self.__update()
-        self.changeSpectrum.emit(mode)
+    def getTheme(self):
+        return self.iconSet
 
     def hasSoftwareRender(self):
         return self.softwareRender
@@ -1518,39 +2499,19 @@ class SettingsDialog(QtWidgets.QDialog):
         frame1.setFrameStyle(QtWidgets.QFrame.Shape.Box | QtWidgets.QFrame.Shadow.Sunken)
         frame1.setLineWidth(1)
         frame2 = QtWidgets.QGroupBox("Requires restart")
-       
-        self.showEQ = QtWidgets.QCheckBox("Show EQ - AudioPlay only")
-        self.showEQ.setToolTip("Display an EQ on music")
-        self.showEQ.setChecked(self.model.hasEQ())
-        self.showEQ.stateChanged.connect(self._onEQChanged)
-
-        spectrumLabel = QtWidgets.QLabel("Spectrum color:")
-        self.spectrumMode = QtWidgets.QComboBox()
-        for m in SpectrumOverlay.BAR_COLORS:
-            self.spectrumMode.addItem(m)
-        self.spectrumMode.setCurrentText(self.model.getSpectrumMode())
-        self.spectrumMode.currentTextChanged.connect(self._onSpectrumModeChanged)
 
         self.showSub = QtWidgets.QCheckBox("Show subtitles")
         self.showSub.setToolTip("Toggle show subtitles")
         self.showSub.setChecked(self.model.hasSubtitles())
         self.showSub.stateChanged.connect(self._onSubChanged)
-        
-        self.softwareRender = QtWidgets.QCheckBox("Software rendering (slow or virtual hardware)")
-        self.softwareRender.setToolTip("Enables compatibility mode for older or virtual hardware — restart to take effect")
-        self.softwareRender.setChecked(self.model.hasSoftwareRender())
-        self.softwareRender.stateChanged.connect(self._onSoftwareRenderChanged)
 
-        # lbl = QtWidgets.QLabel("< Icon theme")
-        self.setIconTheme = QtWidgets.QComboBox()
-        themes = ICOMAP.themes()
-        for item in themes:
-            self.setIconTheme.addItem(item)
-        self.setIconTheme.setCurrentText(self.model.iconSet)
-        self.setIconTheme.currentTextChanged.connect(self._onIconThemeChanged)
-        self.setIconTheme.setToolTip("Select icon theme - restart to take effect")
+        self.btnThemeToggle = QtWidgets.QPushButton()
+        self.btnThemeToggle.setFixedHeight(38)
+        self.btnThemeToggle.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.btnThemeToggle.setToolTip("Tap to switch between Dark and Light theme")
+        self._updateThemeToggleBtn()
+        self.btnThemeToggle.clicked.connect(self._toggleTheme)
 
-        clickBox = QtWidgets.QVBoxLayout(frame1)
         self.slideDuration = QtWidgets.QSpinBox()
         self.slideDuration.setRange(1, 3600)
         self.slideDuration.setSuffix(" sec")
@@ -1562,70 +2523,155 @@ class SettingsDialog(QtWidgets.QDialog):
         slideDurationBox.addWidget(self.slideDuration)
         slideDurationBox.addStretch(1)
 
-        clickBox.addWidget(self.showEQ)
-        clickBox.addWidget(spectrumLabel)
-        clickBox.addWidget(self.spectrumMode)
+        themeBox = QtWidgets.QHBoxLayout()
+        themeLabel = QtWidgets.QLabel("Theme:")
+        themeBox.addWidget(themeLabel)
+        themeBox.addWidget(self.btnThemeToggle)
+        themeBox.addStretch(1)
+
+        clickBox = QtWidgets.QVBoxLayout(frame1)
         clickBox.addWidget(self.showSub)
         clickBox.addLayout(slideDurationBox)
+        clickBox.addLayout(themeBox)
 
-        iconThemeBox = QtWidgets.QHBoxLayout()
-        iconThemeBox.addWidget(QtWidgets.QLabel("Icon theme:"))
-        iconThemeBox.addWidget(self.setIconTheme)
+        self.softwareRender = QtWidgets.QCheckBox("Software rendering (slow or virtual hardware)")
+        self.softwareRender.setToolTip("Enables compatibility mode for older or virtual hardware — restart to take effect")
+        self.softwareRender.setChecked(self.model.hasSoftwareRender())
+        self.softwareRender.stateChanged.connect(self._onSoftwareRenderChanged)
 
         subBox = QtWidgets.QVBoxLayout(frame2)
         subBox.addWidget(self.softwareRender)
-        subBox.addLayout(iconThemeBox)
         
         outBox.addLayout(versionBox)
         outBox.addWidget(frame1)
         outBox.addWidget(frame2)
         self.setLayout(outBox)
-        # make it wider...
         self.setMinimumSize(550, 0)
    
+    def _updateThemeToggleBtn(self):
+        current = self.model.getTheme()
+        if current == "Light":
+            self.btnThemeToggle.setText("☀️ Light Theme  (Tap for Dark)")
+            self.btnThemeToggle.setStyleSheet("""
+                QPushButton {
+                    background: #f0f0f0;
+                    color: #111111;
+                    border: 2px solid #888888;
+                    border-radius: 8px;
+                    padding: 6px 18px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background: #e4e4e4;
+                }
+            """)
+        else:
+            self.btnThemeToggle.setText("🌙 Dark Theme  (Tap for Light)")
+            self.btnThemeToggle.setStyleSheet("""
+                QPushButton {
+                    background: #2b2b2b;
+                    color: #ffffff;
+                    border: 2px solid #555555;
+                    border-radius: 8px;
+                    padding: 6px 18px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background: #383838;
+                }
+            """)
+
+    def _toggleTheme(self):
+        new_theme = "Light" if self.model.getTheme() == "Dark" else "Dark"
+        self.model.setTheme(new_theme)
+        self._updateThemeToggleBtn()
+
     def _onSubChanged(self, showsub):
         self.model.setSubtitle(showsub)
 
     def _onSoftwareRenderChanged(self, val):
         self.model.setSoftwareRender(QtCore.Qt.CheckState.Checked.value == val)
 
-    def _onEQChanged(self, aBool):
-        self.model.setEQ(QtCore.Qt.CheckState.Checked.value == aBool)
-
-    def _onSpectrumModeChanged(self, text):
-        self.model.setSpectrumMode(text)
-
-    def _onIconThemeChanged(self, text):
-        self.model.setIconSet(text)
-
     def _onSlideDurationChanged(self, seconds):
         self.model.setSlideDuration(seconds)
 
 
 class IconMapper():
-    DEFAULT = "default"
+    DEFAULT = "Dark"
+    THEMES = ["Dark", "Light"]
 
-    def __init__(self, section="default"):
-        self.section = section
+    def __init__(self, section="Dark"):
+        self.section = self._normalizeTheme(section)
+        self._iconCache = {}
         self._read()
-        
+
+    @classmethod
+    def _normalizeTheme(cls, theme):
+        if not theme:
+            return cls.DEFAULT
+        t = str(theme).strip().lower()
+        if "light" in t:
+            return "Light"
+        return "Dark"
+
+    def setTheme(self, theme):
+        self.section = self._normalizeTheme(theme)
+
     def _read(self):
         ipath = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "icomap.json")
-        with open(ipath) as fn:
-            self.map = json.load(fn)
-            
+        try:
+            with open(ipath) as fn:
+                self.map = json.load(fn)
+        except Exception:
+            self.map = {}
+        if "Dark" not in self.map:
+            self.map["Dark"] = self.map.get("flat(dark)", {})
+
     def ico(self, name, section=None):
+        return self.getIcon(name, section)
+
+    def getIcon(self, name, section=None):
+        theme = self._normalizeTheme(section or self.section)
         key = name.strip()
-        submap = self.map.get(section or self.section, None)
-        if not submap:
-            submap = self.map[self.DEFAULT]
-        return submap.get(key, self.getDefault(key))
-     
+        cache_key = (key, theme)
+        if cache_key in self._iconCache:
+            return self._iconCache[cache_key]
+
+        base_map = self.map.get("Dark") or self.map.get("flat(dark)") or {}
+        rel_path = base_map.get(key, "")
+        if not rel_path:
+            return QtGui.QIcon()
+
+        full_path = OSTools().joinPathes(OSTools().getWorkingDirectory(), rel_path.lstrip("./"))
+        if not os.path.exists(full_path):
+            return QtGui.QIcon()
+
+        if theme == "Dark":
+            icon = QtGui.QIcon(full_path)
+        else:
+            # Light theme: negative of button icons so they render black/dark on light skin bars
+            img = QtGui.QImage(full_path)
+            if not img.isNull():
+                if img.format() != QtGui.QImage.Format.Format_ARGB32:
+                    img = img.convertToFormat(QtGui.QImage.Format.Format_ARGB32)
+                img.invertPixels(QtGui.QImage.InvertMode.InvertRgb)
+                icon = QtGui.QIcon(QtGui.QPixmap.fromImage(img))
+            else:
+                icon = QtGui.QIcon(full_path)
+
+        self._iconCache[cache_key] = icon
+        return icon
+
     def getDefault(self, name):
-        return self.map[self.DEFAULT].get(name, "")   
-    
+        return self.getIcon(name, self.DEFAULT)
+
     def themes(self):
-        return self.map.keys()
+        return list(self.THEMES)
+
+
+ICOMAP = IconMapper("Dark")
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
@@ -1665,73 +2711,60 @@ def parseOptions(args):
 
 
 def stylesheet():
-    # return "QSlider{margin:1px;padding:1px;background:yellow}" #to view the focus border QSlider:focus{border: 1px solid  #000}
-    # No focus and no ticks are available using stylesheets.
-
     return """
-        QSlider:horizontal{
-            margin:1px;padding:1px;
+        QSlider:horizontal {
+            min-height: 26px;
+            max-height: 28px;
+            background: transparent;
         }
         
-        QSlider:focus{border: 1px dotted #bbf}
-        
         QSlider::groove:horizontal {
-        border: 1px solid #bbb;
-        background: white;
-        height: 8px;
-        border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            background: rgba(0, 0, 0, 0.45);
+            height: 6px;
+            border-radius: 3px;
+            margin: 0 -1px;
         }
         
         QSlider::sub-page:horizontal {
-        background: qlineargradient(x1: 0, y1: 0.2, x2: 1, y2: 1,
-            stop: 0 #bbf, stop: 1 #55f);
-        border: 1px solid #777;
-        height: 10px;
-        border-radius: 4px;
+            background: #3584e4;
+            border-radius: 3px;
         }
         
         QSlider::add-page:horizontal {
-        background: #fff;
-        border: 1px solid #777;
-        height: 10px;
-        border-radius: 4px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 3px;
         }
         
         QSlider::handle:horizontal {
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 #eee, stop:1 #ccc);
-        border: 1px solid #777;
-        width: 13px;
-        margin: -4px 0;
-        border-radius: 4px;
+            background: #ffffff;
+            border: none;
+            width: 3px;
+            margin: -7px 0;
+            border-radius: 1px;
         }
         
-        QSlider::handle:horizontal:hover {
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 #fff, stop:1 #ddd);
-        border: 1px solid #444;
-        border-radius: 4px;
+        QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {
+            background: #5dade2;
+            width: 4px;
+            margin: -8px 0;
         }
         
         QSlider::sub-page:horizontal:disabled {
-        background: #bbb;
-        border-color: #999;
+            background: rgba(255, 255, 255, 0.1);
         }
         
         QSlider::add-page:horizontal:disabled {
-        background: #eee;
-        border-color: #999;
+            background: rgba(255, 255, 255, 0.08);
         }
         
         QSlider::handle:horizontal:disabled {
-        background: #eee;
-        border: 1px solid #aaa;
-        border-radius: 4px;
+            background: rgba(255, 255, 255, 0.3);
         }"""
 
 
 def getAppIcon():
-    return QtGui.QIcon('icons/easyPlay.svg')
+    return QtGui.QIcon(OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "icon.png"))
 
 
 def main():
@@ -1744,17 +2777,23 @@ def main():
         OSTools().setMainWorkDir(wd)
         ep_config = ConfigAccessor(AppName, "ep.ini")  # folder,name&section
         ep_config.read();    
-        ICOMAP = IconMapper(ep_config.get("icoSet", "default"))
+        saved_ico = ep_config.get("theme", ep_config.get("icoSet", IconMapper.DEFAULT))
+        saved_ico = IconMapper._normalizeTheme(saved_ico)
+        ICOMAP = IconMapper(saved_ico)
         Playlist.init(ep_config, ICOMAP)
         Osd.init(ICOMAP)
         argv = sys.argv
         res = parseOptions(argv)
         res["virtual"] = res["virtual"] or ep_config.getBoolean("softwareRender", False)
-        FFMPEGTools.setupRotatingLogger(AppName, res["logConsole"], "EasyPlayer")
+        FFMPEGTools.setupRotatingLogger(AppName, res["logConsole"], AppName)
         de = OSTools().currentDesktop()
-        if de not in OSTools.QT_DESKTOPS:        
+        is_wayland = os.environ.get("XDG_SESSION_TYPE") == "wayland" or "WAYLAND_DISPLAY" in os.environ
+        if de not in OSTools.QT_DESKTOPS and not is_wayland:        
             OSTools().setGTKEnvironment()
             Log.info("GTK based - switched to QT_QPA_PLATFORM = xcb" )
+        elif is_wayland:
+            OSTools().setEnv('QT_WAYLAND_DISABLE_WINDOWDECORATION', '1')
+            Log.info("Wayland session detected - using touch-friendly HeaderBar window controls")
         OSTools().setEnv('QT_LOGGING_RULES', 'qt.svg=false')
         app = QApplication(argv)
         app._sigTimer = installSigIntHandler(app)
@@ -1773,11 +2812,15 @@ def main():
                 fn = OSTools().joinPathes(localPath, fn)
             WIN = MainFrame(app, fn, res['virtual']) 
         app.exec()
-    except:
+    except Exception:
         Log.exception("Error in main:")
         # ex_type, ex_value, ex_traceback
         sys_tuple = sys.exc_info()
-        QtWidgets.QMessageBox.critical(None, "Error!", str(sys_tuple[1]))        
+        traceback.print_exc()
+        if QApplication.instance():
+            QtWidgets.QMessageBox.critical(None, "Error!", str(sys_tuple[1]))
+        else:
+            print(f"Error in main: {sys_tuple[1]}", file=sys.stderr)        
 
 
 if __name__ == '__main__':

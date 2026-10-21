@@ -1,175 +1,150 @@
-# EasyPlayer
-Version 1.6.0
+# TouchPlayer
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.6.0/easyplayer1.6.0.tar)
+A lightweight, gesture-driven Wayland media player for Linux touchscreen laptops and 2-in-1 devices.
 
-A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
+*TouchPlayer is a touch-first derivative forked from [EasyPlayer](https://github.com/kanehekili/EasyPlayer) by Kanehekili.*
 
-![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/main/easyplayer.png)
+---
 
-Configurable Spectrum Analyzer:
+## Why TouchPlayer?
 
-![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/main/spectrum.png)
+Most desktop Linux media players are designed strictly for traditional mouse and keyboard setups. On modern touchscreen laptops running Wayland, pinch-to-zoom is typically unsupported, window controls are too small to tap reliably, and UI fails to accommodate touch interactions.
 
-### Prerequisites
-* Arch: python3, python-pillow and mpv
-* Debian/Mint/Ubuntu: python3 python3-pil libmpv2 (or libmpv1) (no-recommends) 
-* Ubuntu 26.04 needs additionally qt6-svg-plugins
-  #not working for Ubuntu 18.4: libmpv - use python3-opencv instead
-* Fedora: python3-pillow-qt and mpv-libs.x86_64
-* ffmpeg > 3.X to 8.X
-* python3-pyqt6
-* The test suite in `tests/` needs nothing beyond the above - see [tests/README.md](tests/README.md)
+**TouchPlayer** reimagines the player experience with **native Wayland multi-touch ergonomics**, fluid gesture controls, client-side window management, and picture adjustments - all powered by the high-performance `libmpv` and Qt6 OpenGL engine.
 
-#### Set GTK Theme for this QT application
-If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might set QT_QPA_PLATFORMTHEME:
-* Depending on the distro and version this variable may be defined with one of:
-* gtk2, qt6ct, fusion, gtk3
-* Easyplayer will enforce "QT_QPA_PLATFORM=xcb" on Wayland for SSD decorations.
-* On Ubuntu 26.04 you need to install qt6-gtk-platformtheme. This will get your GTK theme into any QT6 app. 
-* On Ubuntu(with libadwaita) use /etc/environment to add GTK_THEME=yourTheme to enforce a third party theme. (Hack)
+---
 
-### Features
-* Easyplayer supports wayland and orientation recognition (which mplayer does not). 
-* Has been tested with interlaced video and 4K 
-* Subtitles can be shown (settings)
-* Playlist support
-* Picture/image viewer (png, jpg, bmp, gif, webp, tiff, avif, heic)
-    * Formats without a Qt image plugin (avif, heic) are decoded via ffmpeg
-* Opening a single file loads its whole folder - including subfolders
-    * Only the file you opened is shown; nothing advances on its own
-    * Next/Prev step to the next or previous picture/video (green arrows, or Ctrl+Left / Ctrl+Right) - a video plays at once and stops at its end, an image waits
-    * Next/Prev wrap around at the ends of the list; a running slideshow still stops at the last item
-    * Press play to run through the rest of the folder as a slideshow (videos included)
-    * Window title and info line follow the file currently shown
-* Slideshow with configurable timeout
-* Zoom with Ctrl + mouse wheel - works for videos and pictures
-    * Zooms in on the mouse pointer, from 100% up to 800%
-    * While zoomed in, drag with the left mouse button to move the visible section
-    * The cursor turns into a hand as soon as the zoom is active
-* Flat and non flat icon set
-* Language can be selected
-* Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
-* Colors of the EQ display can be changed live via the settings dialog. 
-* Settings allows you to switch to software mode (old hardware & virtual environments)
+## Key Features
 
+### 👆 Multi-Touch Gestures (Native Wayland)
+- **Continuous Pinch-to-Zoom:** Smooth two-finger pinch-to-zoom anchored directly at the midpoint between your fingers (from 100% up to 800% zoom with logarithmic scaling).
+- **Boundary Clamping:** Visible video area is clamped to prevent panning into empty space when zoomed.
+- **Two-Finger & One-Finger Pan:** Effortlessly slide two fingers across the screen to pan the video, or drag with one finger when zoomed in.
+- **Double-Tap Reset:** Quickly double-tap the video surface with a finger or stylus to instantly reset zoom back to 100%.
+- **Tap OSD Toggle:** Tap the video surface in fullscreen mode to smoothly toggle the on-screen display.
 
-### Support for Qemu and old hardware:
-* -v will use a virtual GL driver or software for rendering. (easyplayer -v)
-* Can be set via the "Settings dialog - Software mode" as well. 
+### 🪟 Touch-Friendly Window & Ergonomics
+- **Wayland Window Dragging:** Custom top HeaderBar supports direct native Wayland window dragging (`startSystemMove()`) and double-tap to maximize/restore.
+- **Large Touch Controls:** Window buttons (Minimize `—`, Maximize/Restore `□`/`❐`, Close `✕`) feature large `38x38px` touch targets with generous 12px gaps.
+- **Frameless Translucent Shell:** Elegant 10px rounded corners with translucent backdrop matching modern desktop styling.
+- **Middle-Elided Centered Title:** File and track names are cleanly centered in the header bar with smart middle-elision (`...`) and click-drag forwarding.
 
+### 🎛️ Playback & Picture Controls
+- **Single-File Playback:** Clean, immediate loading of chosen files without unwanted recursive folder scanning or accidental playlist auto-advancing.
+- **Auto-Replay on EOF:** Pressing Play or Space at the end of a video automatically restarts playback from `00:00`.
+- **Playback Speed Cycler:** Dedicated bottom-left touch button that alternates between `1x`, `1.5x`, and `2x` speeds with pitch preservation.
+- **Color Temperature Slider:** Dedicated slider to adjust warmth and coolness between `5000K` and `9000K` via mpv's `@colortemp` video filter with lightness preservation.
+- **Clamped Brightness Slider:** Touch slider clamped to `[-30, 30]` to prevent over-washing or total blackouts.
+- **Smart Fullscreen OSD:** Dynamically borrows bottom transport and seeker bars into fullscreen with a comfortable **6-second auto-hide timeout** and drag-hold detection.
 
-#### Install via pip (all distros)
-Install system dependencies first (libmpv, ffmpeg), then:
-```
-pip install easympv
-```
-Launch with `easyplayer` or open a file with `easyplayer /path/to/video.mp4`
+---
 
-#### Install via ppa on Linux Mint or Ubuntu (Mint 22.2, Ubuntu 22.04 and newer versions)
-```
-sudo add-apt-repository ppa:jentiger-moratai/mediatools
-sudo apt update
-sudo apt install --no-install-recommends easyplayer
-```
-(--no-install-recommends will install only what is required)
-Select video and open it with "Open with ->EasyPlayer", oder via terminal "easyplayer"
+## Installation
 
-Remove with:
-`sudo apt remove easyplayer`
+### Recommended Option: **[GitHub Releases](https://github.com/notalanjoseph/TouchPlayer/releases)**
 
-#### Install EasyPlayer via AUR (Arch Linux /Manjaro only)
-* Use pamac or other GUI tools, search for "easyplayer" in AUR, click install
-* Manually :
-    * Download [PKGBUILD ](https://aur.archlinux.org/cgit/aur.git/snapshot/easyplayer.tar.gz)
-    * unpack it and go into the "easyplayer" folder
-    * execute `makepkg -s`
-    * excute `sudo pacman -U easyplayer-1.x.x.x-1-x86_64.pkg.tar.zst` 
-    * uninstall via `sudo pacman -Rs easyplayer`
+#### For Ubuntu / Debian / Linux Mint:
+Download `touchplayer_*_all.deb` from the latest release. Install it using:
 
-Select video and open it with "Open with ->EasyPlayer", oder via terminal "easyplayer"
-
-
-#### Install dependencies manually on Linux Mint or Ubuntu (tested from noble to resolute)
-```
-sudo apt install --no-install-recommends python3-pyqt6 ffmpeg python3-pil libmpv2
+```bash
+sudo apt install ./touchplayer_*_all.deb
 ```
 
-#### Install dependencies on Fedora
+#### For Arch/ Fedora/ openSUSE or any Linux:
+Download `touchplayer-*.tar.gz` from the latest release, extract it. Run the user installer:
+
+```bash
+tar -xzf touchplayer-*.tar.gz
+cd touchplayer-*
+./install.sh --user
 ```
-sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
+
+To install system-wide instead:
+```bash
+sudo ./install.sh
 ```
 
-### How to install with a terminal
-* Install dependencies (see prerequisites)
-* Download the easyplayer*.tar from the download link (see above)
-* Extract it to a location that suits you.
-* Open a terminal to execute the install.sh file inside the folder with sudo like `sudo ./install.sh`
-* (if you are in the download directory - just an example)
-* The app will be installed in /opt/easyplayer with a link to /usr/bin. 
-* The app should be appear in a menu or "Actvities"
-* Can be openend by selecting a video file & Open with...
-* In the terminal can be started via `easyplayer`
-* python qt6, mpv and ffmpeg are required
-* you may now remove that download directory.
-* logs can be found in the user home ".config/EasyPlayer" folder
+### Dev Option: Run from Source
+You can clone the repository and run TouchPlayer directly without installation:
 
-### How to remove
-* Open a terminal
-* execute `sudo /opt/easyplayer/uninstall.sh`
+```bash
+git clone https://github.com/notalanjoseph/TouchPlayer.git
+cd TouchPlayer
+python3 src/EasyPlayer.py /path/to/media.mp4
+```
 
-### Changes 
-06.10.2026
-* On-screen controls in fullscreen (an auto-hiding overlay holding prev/play/stop/next, the slider and the info row), a new Stop action that holds the current frame and leaves fullscreen, pictures now honour their EXIF orientation tag, ffmpeg is located via PATH instead of a hardcoded /usr/bin, a redesigned icon set across all three themes, and the project is now GPL-2.0-or-later throughout
+---
 
-10.09.2026
-* Zoom for videos and pictures via Ctrl + mouse wheel, pan the zoomed image with the left mouse button
-* Opening a file queues its whole folder tree - next/prev step through it, play runs it as a slideshow
-* Next/Prev buttons added to the toolbar
-* Added mts, m2ts, avif and heic; pictures now show up in the default file dialog filter
-* Window title follows the current track - the media title, or the file name when there is none
-* Reworked play/pause: browsing shows one item at a time (a video plays once, an image holds), pressing play runs the show from the current item, and the button always reflects what is happening
-* Next/Prev wrap around at the ends of the list
-* The folder scan sorts like a file manager: case-insensitive, numbers as numbers
-* The playlist panel shows subfolder entries with their relative path (VD/song.mp4)
-* Fixed the playlist panel button icon in the default icon set
+## Running TouchPlayer
 
-12.05.2026
-* Fix pause/play logic, audio display management, and PyDev import
+Once installed, you can launch TouchPlayer from your application menu, file manager ("Open With..."), or terminal:
 
-23.04.2026:
-* Added slideshow features for pictures
-* Improved scrolling while playing
+```bash
+touchplayer /path/to/media.mp4
+```
 
-18.04.2026
-* Remove outer border for fullscreen
-* Picture/image support added to file dialog and MIME types
-* Fix playlist errors
+---
 
-30.03.2026
-* Playlist support
-* Fix scaled Xwayland desktops
+## Updating
 
-21.03.2026
-* Support for virtual environments or slow hardware via SettingsDialog
+To update TouchPlayer to a newer release:
 
-20.03.2026
-* introducing "parec" for Spectrum EQ (Ubuntu)
- 
-16.03.2026
-* Configuration of Spectrum EQ
-* Reviewed Pulseaudio dependencies
-* Distro agnostic installation (Debian & Arch)
+- **If installed via `.deb` (Ubuntu / Debian / Linux Mint):**
+  Download the new `.deb` file from the latest [GitHub Releases](https://github.com/notalanjoseph/TouchPlayer/releases) and install it:
+  ```bash
+  sudo apt install ./touchplayer_*_all.deb
+  ```
+  `apt` automatically upgrades the existing installation in place.
 
-12.03.2026
-* Graphic EQ display for audio files 
+- **If installed via Universal Tarball (`.tar.gz`):**
+  Download and extract the new release tarball, then run the installer:
+  ```bash
+  # If previously installed for current user:
+  ./install.sh --user
 
-09.03.2026
-* Support for playlists and streams
+  # If previously installed system-wide:
+  sudo ./install.sh
+  ```
+  The installer cleanly overwrites the previous version.
 
-05.03.2026
-* Hardened interlacing recognition, fixed interprocess communication
+---
 
-26..12.2025
-* Initial start
+## Uninstallation
 
+To cleanly remove TouchPlayer from your system:
+
+- **If installed via `.deb`:**
+  ```bash
+  sudo apt remove touchplayer
+  ```
+- **If installed via user script (`--user`):**
+  ```bash
+  ./uninstall.sh --user
+  ```
+- **If installed via system script (`sudo ./install.sh`):**
+  ```bash
+  sudo ./uninstall.sh
+  ```
+
+---
+
+## Releasing
+
+Use `bump-my-version` to bump the version, commit, and create the release tag:
+
+```bash
+bump-my-version bump patch   # or minor / major — bumps pyproject.toml, commits, and tags locally
+git push
+git push --follow-tags
+```
+
+`.github/workflows/release.yml` will automatically run verification tests, build the `.deb` package and universal tarball, generate SHA-256 checksums, and publish the GitHub Release with release notes.
+
+---
+
+## License & Credits
+
+- **License:** GNU General Public License v2.0 or later ([GPL-2.0-or-later](LICENSE)).
+- **Upstream Credits:** TouchPlayer is derived from [EasyPlayer](https://github.com/kanehekili/EasyPlayer) created by **Kanehekili**, incorporating `libmpv` and Qt6.
+- <a href="https://www.flaticon.com/free-icons/rss-button" title="rss button icons">Rss button icons created by juicy_fish - Flaticon</a>
+- <a href="https://www.flaticon.com/free-icons/vinyl-record" title="vinyl record icons">Vinyl record icons created by juicy_fish - Flaticon</a>

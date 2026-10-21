@@ -12,12 +12,11 @@
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import pyqtSlot
-import FFMPEGTools
+import FFMPEGTools, time
 
 Log = FFMPEGTools.Log
 
-HIDE_DELAY_MS = 3000
-ICON_SIZE = 32
+HIDE_DELAY_MS = 6000
 
 _icomap = None
 
@@ -27,85 +26,46 @@ def init(icomap):
     _icomap = icomap
 
 
-def _section():
-    """the bar is dark: flat(light) icons vanish on it, so any flat theme
-    takes its OSD icons from flat(dark)"""
-    return "flat(dark)" if _icomap.section.startswith("flat") else _icomap.section
-
-
-def _icon(key):
-    return QtGui.QIcon(_icomap.ico(key, _section()))
-
-
 class OsdOverlay(QtWidgets.QWidget):
     """Control bar at the bottom of the player while fullscreen.
 
-    A plain child widget - never drawn on the GL surface (see SpectrumOverlay).
+    A plain child widget hosting borrowed controls (seeker row and bottom bar).
+    Never drawn on the GL surface.
     The background is opaque on purpose: alpha over the mpv FBO does not blend.
     """
 
     mouseActive = QtCore.pyqtSignal()  # movement over the bar - its children eat it otherwise
 
-    # positional, matching the action tuple MainFrame hands over
-    BUTTON_KEYS = ("prev", "playStart", "stopAction", "next")
-
-    def __init__(self, player, actions):
+    def __init__(self, player, actions=None):
         super().__init__(player)
         self._player = player
         self._borrowed = []
-        self._keys = {}
-        self._playBtn = None
+        self._theme = "Dark"
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(self._style())
         self._box = QtWidgets.QVBoxLayout(self)
         self._box.setContentsMargins(0, 0, 0, 0)
         self._box.setSpacing(0)
-        self._box.addWidget(self._makeButtonRow(actions))
         self._trackMoves()
         player.installEventFilter(self)
 
-    def _style(self):
-        color = self.palette().color(QtGui.QPalette.ColorRole.Window)
-        bc = color.darker(120)
-        darker = color.darker(150)
-        lighter = color.lighter(140)
-        return ("OsdOverlay { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-                " stop:0 %s, stop:1.0 %s); border: 1px solid %s; }"
-                % (darker.name(), lighter.name(), bc.name()))
+    def setTheme(self, theme):
+        self._theme = theme
+        self.setStyleSheet(self._style())
 
-    def _makeButtonRow(self, actions):
-        row = QtWidgets.QWidget()
-        lay = QtWidgets.QHBoxLayout(row)
-        lay.setContentsMargins(0, 2, 0, 2)
-        lay.setSpacing(8)
-        lay.addStretch()
-        for action, key in zip(actions, self.BUTTON_KEYS):
-            btn = QtWidgets.QToolButton()
-            btn.setDefaultAction(action)  # tooltip and enabled state follow
-            btn.setAutoRaise(True)
-            btn.setIconSize(QtCore.QSize(ICON_SIZE, ICON_SIZE))
-            self._keys[btn] = key
-            # a default action re-syncs the button's icon whenever the action
-            # changes - put the OSD's own icon back afterwards
-            action.changed.connect(lambda b=btn: b.setIcon(_icon(self._keys[b])))
-            btn.setIcon(_icon(key))
-            if key == "playStart":
-                self._playBtn = btn
-            lay.addWidget(btn)
-        lay.addStretch()
-        return row
+    def _style(self):
+        if str(self._theme).lower() == "light":
+            return "OsdOverlay { background-color: #FAF0E6; border: 1px solid #DDD0C4; border-radius: 0px; }"
+        return "OsdOverlay { background-color: #222222; border: 1px solid #333333; border-radius: 0px; }"
 
     def setPlaying(self, isPlaying):
-        """the play button is the one icon that changes while the bar lives"""
-        if self._playBtn is None:
-            return
-        self._keys[self._playBtn] = "playPause" if isPlaying else "playStart"
-        self._playBtn.setIcon(_icon(self._keys[self._playBtn]))
+        """Kept for compatibility; play button in borrowed bottom bar updates via action"""
+        pass
 
     def borrow(self, widget):
-        """info row / slider live in here while fullscreen"""
+        """widgets (seeker row, bottom bar) live in here while fullscreen"""
         self._borrowed.append(widget)
-        self._box.insertWidget(self._box.count() - 1, widget)
+        self._box.addWidget(widget)
         widget.show()
         self._trackMoves()
         self._reposition()
@@ -115,6 +75,12 @@ class OsdOverlay(QtWidgets.QWidget):
         taken = self._borrowed
         self._borrowed = []
         for widget in taken:
+            try:
+                widget.removeEventFilter(self)
+                for child in widget.findChildren(QtWidgets.QWidget):
+                    child.removeEventFilter(self)
+            except RuntimeError:
+                pass
             self._box.removeWidget(widget)
         return taken
 
@@ -129,20 +95,34 @@ class OsdOverlay(QtWidgets.QWidget):
         self.mouseActive.emit()
         super().mouseMoveEvent(event)
 
+    def mousePressEvent(self, event):
+        self.mouseActive.emit()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.mouseActive.emit()
+        super().mouseReleaseEvent(event)
+
     def eventFilter(self, obj, event):
-        if event.type() == QtCore.QEvent.Type.MouseMove:
+        if event.type() in (QtCore.QEvent.Type.MouseMove, QtCore.QEvent.Type.MouseButtonPress, QtCore.QEvent.Type.MouseButtonRelease):
             self.mouseActive.emit()
         elif obj is self._player and event.type() == QtCore.QEvent.Type.Resize:
             self._reposition()
+            if getattr(self, '_controller', None) is not None:
+                self._controller._repositionTopBar()
         return False
 
     def showEvent(self, event):
         self._reposition()
+        if getattr(self, '_controller', None) is not None:
+            self._controller._repositionTopBar()
         super().showEvent(event)
 
     def _reposition(self):
-        height = self.sizeHint().height()
+        height = max(self.sizeHint().height(), 80)
         self.setGeometry(0, self._player.height() - height, self._player.width(), height)
+        if getattr(self, '_controller', None) is not None:
+            self._controller._repositionTopBar()
 
 
 class OsdController(QtCore.QObject):
@@ -152,17 +132,83 @@ class OsdController(QtCore.QObject):
     the buttons are MainFrame's actions, the slider is MainFrame's slider.
     """
 
-    def __init__(self, player, actions):
+    def __init__(self, player, actions=None):
         super().__init__(player)
         self._player = player
         self._overlay = OsdOverlay(player, actions)
+        self._overlay._controller = self
         self._overlay.hide()
         self._overlay.mouseActive.connect(self.wake)
+        self._topBar = None
         self._enabled = False
         self._timer = QtCore.QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(HIDE_DELAY_MS)
         self._timer.timeout.connect(self._onTimeout)
+
+    def setTopBar(self, topBar):
+        if self._topBar is not None:
+            try:
+                self._topBar.removeEventFilter(self)
+                for child in self._topBar.findChildren(QtWidgets.QWidget):
+                    child.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._topBar = topBar
+        if self._topBar is not None:
+            self._topBar.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+            self._topBar.setMouseTracking(True)
+            self._topBar.installEventFilter(self)
+            for child in self._topBar.findChildren(QtWidgets.QWidget):
+                child.setMouseTracking(True)
+                child.installEventFilter(self)
+            self._repositionTopBar()
+
+    def _repositionTopBar(self):
+        if self._topBar is not None and self._player is not None:
+            height = max(self._topBar.sizeHint().height(), 46)
+            self._topBar.setGeometry(0, 0, self._player.width(), height)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QtCore.QEvent.Type.MouseMove, QtCore.QEvent.Type.MouseButtonPress, QtCore.QEvent.Type.MouseButtonRelease):
+            self.wake()
+        return False
+
+    def isVisible(self):
+        return self._overlay.isVisible() or (self._topBar is not None and self._topBar.isVisible())
+
+    def show(self):
+        if not self._enabled:
+            return
+        self._suppressWakeUntil = time.time() + 0.35
+        if not self._overlay.isVisible():
+            self._overlay.show()
+            self._overlay.raise_()
+        if self._topBar is not None:
+            self._repositionTopBar()
+            self._topBar.show()
+            self._topBar.raise_()
+        if hasattr(self._player, 'restoreCursor'):
+            self._player.restoreCursor()
+        self._timer.start()
+
+    def hide(self):
+        if not self._enabled:
+            return
+        self._suppressWakeUntil = time.time() + 0.35
+        self._timer.stop()
+        self._overlay.hide()
+        if self._topBar is not None:
+            self._topBar.hide()
+        self._player.setCursor(QtCore.Qt.CursorShape.BlankCursor)
+
+    def toggle(self):
+        if not self._enabled:
+            return
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
 
     def enable(self):
         self._enabled = True
@@ -172,6 +218,8 @@ class OsdController(QtCore.QObject):
         self._enabled = False
         self._timer.stop()
         self._overlay.hide()
+        if self._topBar is not None:
+            self._topBar.hide()
 
     def setPlaying(self, isPlaying):
         self._overlay.setPlaying(isPlaying)
@@ -187,9 +235,16 @@ class OsdController(QtCore.QObject):
     def wake(self):
         if not self._enabled:
             return
+        if time.time() < getattr(self, '_suppressWakeUntil', 0):
+            return
         if not self._overlay.isVisible():
             self._overlay.show()
-            self._overlay.raise_()  # above the image and spectrum overlays
+            self._overlay.raise_()  # above the image overlay
+        if self._topBar is not None and not self._topBar.isVisible():
+            self._repositionTopBar()
+            self._topBar.show()
+            self._topBar.raise_()
+        if hasattr(self._player, 'restoreCursor'):
             self._player.restoreCursor()
         self._timer.start()
 
@@ -197,12 +252,16 @@ class OsdController(QtCore.QObject):
         """something was raised over the video - the bar has to stay on top of it"""
         if self._overlay.isVisible():
             self._overlay.raise_()
+        if self._topBar is not None and self._topBar.isVisible():
+            self._topBar.raise_()
 
     def _onTimeout(self):
         if not self._enabled:
             return
         if QtWidgets.QApplication.mouseButtons() != QtCore.Qt.MouseButton.NoButton: # @UndefinedVariable
-            self._timer.start()  # a button is held - do not pull the bar out of a drag
+            self._timer.start(1000)  # a button is held - recheck in 1s so it doesn't lock for another full 6s
             return
         self._overlay.hide()
+        if self._topBar is not None:
+            self._topBar.hide()
         self._player.setCursor(QtCore.Qt.CursorShape.BlankCursor)
