@@ -746,11 +746,20 @@ class Player(QOpenGLWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """free mpv_context and terminate player before closing the widget"""
-        self.ctx.free()
+        if self.ctx is not None:
+            try:
+                self.ctx.free()
+            except Exception:
+                pass
+            self.ctx = None
         if self.sliderThread:
             self.sliderThread.stop()
-        self.mpv.terminate()
-        self.mpv = None
+        if self.mpv:
+            try:
+                self.mpv.terminate()
+            except Exception:
+                pass
+            self.mpv = None
         event.accept()
 
     def _getMPVArgsEasy(self,isVirtual):

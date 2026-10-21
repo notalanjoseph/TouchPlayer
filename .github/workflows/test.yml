@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       QT_QPA_PLATFORM: offscreen
+      PYTHONPATH: src:tests
 
     steps:
       - name: Checkout Code
@@ -33,6 +34,7 @@ jobs:
             ffmpeg \
             libegl1 \
             libgl1 \
+            libgl1-mesa-dri \
             pulseaudio-utils
 
       - name: Set up Python
