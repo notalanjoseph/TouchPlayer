@@ -35,7 +35,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
 
 ## Touchscreen Gesture Architecture
 
-- **`ZoomController` (`src/EasyPlayer.py`):**
+- **`ZoomController` (`src/Player.py`):**
   - Canonical controller for both video (via `mpv.video_zoom` and `mpv.video_pan_{x,y}`) and still images (via `ImageOverlay`).
   - Zoom range: `1.0` (100%, no zoom) to `8.0` (800% max).
   - Zoom factor is logarithmic in mpv (`mpv.video_zoom = math.log2(factor)`).
@@ -46,7 +46,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
     - `pinchZoom(ratio, mx, my, dx, dy)`: Continuous two-finger pinch-to-zoom anchored at gesture midpoint, with simultaneous translation.
     - `resetZoom()`: Resets factor to 1.0, centers pan to (0, 0), and updates both mpv and image overlay.
 
-- **`Player` Touch Pipeline (`src/EasyPlayer.py`):**
+- **`Player` Touch Pipeline (`src/Player.py`):**
   - Inherits from `QOpenGLWidget`.
   - Overrides `event(e)` to process `QTouchEvent`.
   - **Two fingers:** Tracks distance and midpoint delta. Continuously updates zoom and pan via `zoomCtrl.pinchZoom(...)`.
