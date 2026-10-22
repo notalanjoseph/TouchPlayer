@@ -9,7 +9,7 @@ description = "A lightweight, gesture-driven Wayland media player for Linux touc
 readme = "README.md"
 license = { text = "GPL-2.0-or-later" }
 authors = [
-    { name = "Alan Joseph", email = "alan.joseph@hatio.in" }
+    { name = "Alan Joseph", email = "notalanjoseph@gmail.com" }
 ]
 requires-python = ">=3.9"
 dependencies = [
