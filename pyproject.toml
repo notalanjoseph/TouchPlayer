@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "touchplayer"
-version = "1.1.0"
+version = "1.1.1"
 description = "A lightweight, gesture-driven Wayland media player for Linux touchscreen laptops"
 readme = "README.md"
 license = { text = "GPL-2.0-or-later" }
@@ -33,7 +33,7 @@ touchplayer = "EasyPlayer:main"
 ]
 
 [tool.bumpversion]
-current_version = "1.1.0"
+current_version = "1.1.1"
 commit = true
 tag = true
 tag_name = "v{new_version}"
