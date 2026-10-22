@@ -49,7 +49,7 @@ Log = FFMPEGTools.Log
 ep_config = None
 AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "audio.png")
 #####################################################
-Version = "1.0.1"
+Version = "1.1.0"
 #####################################################
 
 
