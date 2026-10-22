@@ -49,6 +49,66 @@ class VolumeSliderTest(unittest.TestCase):
         self.assertNotIn(VOLUME_BOOST_COLOR, slider.styleSheet())
 
 
+class TestSeekMute(unittest.TestCase):
+    """Seeking mutes briefly, but must never undo a mute the user set"""
+
+    class FakeMpv:
+        audio = 1
+        volume = 100
+
+        def __init__(self):
+            self.props = {"mute": "no"}
+
+        def __getitem__(self, key):
+            return self.props[key]
+
+        def __setitem__(self, key, val):
+            self.props[key] = val
+
+    def setUp(self):
+        self.app = support.app()
+        from EasyPlayer import Player
+        self.parent = QtWidgets.QWidget()
+        self.player = Player(self.parent, isVirtual=True)
+        self.realMpv = self.player.mpv
+        self.player.mpv = self.FakeMpv()
+
+    def tearDown(self):
+        self.player.mpv = self.realMpv
+        self.player.deleteLater()
+        self.parent.deleteLater()
+
+    def test_seek_mutes_then_restores_sound(self):
+        self.player._muteWhileSeeking(True)
+        self.assertTrue(self.player.isMuted())
+        self.player._muteWhileSeeking(False)
+        self.assertFalse(self.player.isMuted())
+
+    def test_user_mute_survives_a_seek(self):
+        self.player.setMuted(True)
+        self.player._muteWhileSeeking(True)
+        self.player._muteWhileSeeking(False)
+        self.assertTrue(self.player.isMuted())
+
+    def test_direct_seek_without_mute_keeps_user_mute(self):
+        # arrow-key seeks call seek() directly, which only ever unmutes at the end
+        self.player.setMuted(True)
+        self.player._muteWhileSeeking(False)
+        self.assertTrue(self.player.isMuted())
+
+    def test_user_mute_during_a_seek_wins(self):
+        self.player._muteWhileSeeking(True)
+        self.player.setMuted(True)
+        self.player._muteWhileSeeking(False)
+        self.assertTrue(self.player.isMuted())
+
+    def test_repeated_seeks_while_dragging(self):
+        for _ in range(3):
+            self.player._muteWhileSeeking(True)
+        self.player._muteWhileSeeking(False)
+        self.assertFalse(self.player.isMuted())
+
+
 class TestBottomControlsAlignment(unittest.TestCase):
     def setUp(self):
         self.app = support.app()

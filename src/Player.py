@@ -77,6 +77,7 @@ class Player(QOpenGLWidget):
         self.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.PartialUpdate)
         self.duration = 0
         self.sliderThread = None
+        self._seekMuted = False  # True only while a seek, not the user, holds the mute
         self.lastError = None
         self.isAudioOnly = False
         self.durString = "00:00"
@@ -637,6 +638,7 @@ class Player(QOpenGLWidget):
         return 100
 
     def setMuted(self, muted):
+        self._seekMuted = False  # the user's choice outlasts any seek in flight
         if self.mpv is not None:
             self.mpv["mute"] = "yes" if muted else "no"
             self.volumeChanged.emit(self.getVolume(), self.isMuted())
@@ -706,11 +708,16 @@ class Player(QOpenGLWidget):
         return getattr(self, '_speed', 1.0)
 
     def _muteWhileSeeking(self, isSeeking):
+        """Silence the seek, then undo only a mute the seek itself made.
+        A user who muted before seeking stays muted."""
         if self.mpv.audio == 0:
             return
         if isSeeking:
-            self.mpv["mute"] = "yes"
-        else:
+            if not self._seekMuted and not self.isMuted():
+                self._seekMuted = True
+                self.mpv["mute"] = "yes"
+        elif self._seekMuted:
+            self._seekMuted = False
             self.mpv["mute"] = "no"
 
     def setSubtitles(self, idx):
