@@ -37,6 +37,7 @@ import Playlist
 from Playlist import PlaylistPanel, PlaylistManager, PLAYLIST_EXTENSIONS, MEDIA_EXTENSIONS
 import Osd
 from Osd import OsdController
+from Mpris import MprisController
 
 
 
@@ -1293,10 +1294,31 @@ class MainFrame(QtWidgets.QMainWindow):
         self.slideshowCtrl = SlideshowController(self.player, self)
         self.playback = PlaybackController(self.player, self.slideshowCtrl)
         self.audioDisplayCtrl = AudioDisplayController(self.player, self.settings, AUDIO_FALLBACK_IMAGE)
+        self._initMediaKeys()
         self.centerWindow()
         self.show()
         QtCore.QTimer.singleShot(50, self.__queueStarted)
     
+    def _initMediaKeys(self):
+        """Headset buttons and media keys: over MPRIS, or as key presses when nothing forwards them"""
+        self.mpris = MprisController(self, AppName)
+        self.player.syncPlayStatus.connect(self.mpris.onPlayStatus)
+        self.player.volumeChanged.connect(self.mpris.onVolume)
+        self.player.speedChanged.connect(self.mpris.onSpeed)
+        self.player.fileLoaded.connect(self.mpris.onFileLoaded)
+        if self.mpris.isActive():
+            return  # desktops that forward keys to MPRIS may also deliver them here: toggling twice
+        keys = (
+            (QtCore.Qt.Key.Key_MediaTogglePlayPause, self.mpris.playPause),
+            (QtCore.Qt.Key.Key_MediaPlay, self.mpris.play),
+            (QtCore.Qt.Key.Key_MediaPause, self.mpris.pause),
+            (QtCore.Qt.Key.Key_MediaStop, self.mpris.stop),
+        )
+        for key, slot in keys:
+            sc = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+            sc.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(slot)
+
     def initUI(self):
         # ##the actions
         
@@ -2376,6 +2398,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.setWindowTitle(title)
         if hasattr(self, 'ui_TitleLabel'):
             self.ui_TitleLabel.setText(text)
+        if hasattr(self, 'mpris'):
+            self.mpris.onTitle(text)
 
     def _onTitleChanged(self, title):
         """Follow the media title - it falls back to the file name when a track
@@ -2388,6 +2412,8 @@ class MainFrame(QtWidgets.QMainWindow):
 
     def closeEvent(self, __event: QCloseEvent) -> None:
         self.player.closePending = True
+        if hasattr(self, 'mpris'):
+            self.mpris.close()
         if self.playlistThread is not None:
             self.playlistThread.wait(3000)
         self.player.close()
