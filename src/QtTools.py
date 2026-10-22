@@ -71,18 +71,37 @@ def is_theme_dark(widget):
     return luminance < 0.5
 
 
+VOLUME_MAX = 130  # mpv's own default volume-max; above 100 is software gain and may clip
+VOLUME_BOOST_COLOR = "#e66100"
+
+
 class VolumeSlider(QtWidgets.QSlider):
-    """Touch-friendly volume slider that jumps directly to the tapped/pressed position."""
+    """Touch-friendly volume slider that jumps directly to the tapped/pressed position.
+    Runs past 100% into software boost, where the filled part turns orange."""
 
     def __init__(self, orientation=QtCore.Qt.Orientation.Horizontal, parent=None):
         super().__init__(orientation, parent)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
-        self.setRange(0, 100)
+        self._theme = "Dark"
+        self._boosted = False
+        self.setRange(0, VOLUME_MAX)
         self.setValue(100)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.setTheme("Dark")
+        self.valueChanged.connect(self._onValueChanged)
+
+    def isBoosted(self):
+        return self._boosted
+
+    def _onValueChanged(self, val):
+        # restyle only when crossing 100: a stylesheet per drag step would be wasteful
+        if (val > 100) != self._boosted:
+            self._boosted = val > 100
+            self.setTheme(self._theme)
 
     def setTheme(self, theme="Dark"):
+        self._theme = theme
+        fill = VOLUME_BOOST_COLOR if self._boosted else "#3584e4"
         is_dark = (str(theme).lower() != "light")
         groove_border = "rgba(255, 255, 255, 0.22)" if is_dark else "rgba(0, 0, 0, 0.15)"
         groove_bg = "rgba(0, 0, 0, 0.45)" if is_dark else "rgba(0, 0, 0, 0.10)"
@@ -100,7 +119,7 @@ class VolumeSlider(QtWidgets.QSlider):
                 border-radius: 3px;
             }}
             QSlider::sub-page:horizontal {{
-                background: #3584e4;
+                background: {fill};
                 border-radius: 3px;
             }}
             QSlider::add-page:horizontal {{
@@ -116,7 +135,7 @@ class VolumeSlider(QtWidgets.QSlider):
             }}
             QSlider::handle:horizontal:hover, QSlider::handle:horizontal:pressed {{
                 background: {handle_bg};
-                border: 1px solid #3584e4;
+                border: 1px solid {fill};
             }}
         """)
 

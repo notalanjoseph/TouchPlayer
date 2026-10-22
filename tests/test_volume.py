@@ -24,6 +24,30 @@ class VolumeSliderTest(unittest.TestCase):
         slider._setValueFromPos(100)
         self.assertEqual(slider.value(), 100)
 
+    def test_boost_range_and_tint(self):
+        from QtTools import VOLUME_MAX, VOLUME_BOOST_COLOR
+        slider = VolumeSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.resize(100, 28)
+        self.assertEqual(slider.maximum(), VOLUME_MAX)
+        self.assertEqual(slider.value(), 100)
+        self.assertFalse(slider.isBoosted())
+        self.assertNotIn(VOLUME_BOOST_COLOR, slider.styleSheet())
+
+        # End of the groove reaches the boost ceiling and tints the fill
+        slider._setValueFromPos(100)
+        self.assertEqual(slider.value(), VOLUME_MAX)
+        self.assertTrue(slider.isBoosted())
+        self.assertIn(VOLUME_BOOST_COLOR, slider.styleSheet())
+
+        # A theme switch while boosted keeps the tint
+        slider.setTheme("Light")
+        self.assertIn(VOLUME_BOOST_COLOR, slider.styleSheet())
+
+        # Back to 100 drops the tint
+        slider.setValue(100)
+        self.assertFalse(slider.isBoosted())
+        self.assertNotIn(VOLUME_BOOST_COLOR, slider.styleSheet())
+
 
 class TestBottomControlsAlignment(unittest.TestCase):
     def setUp(self):

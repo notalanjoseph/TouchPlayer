@@ -31,7 +31,7 @@ from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
 import sys, os, json, FFMPEGTools, getopt, traceback, locale, re, math, time
 from threading import Condition
-from QtTools import SliderThread, installSigIntHandler, VolumeSlider, BrightnessSlider, VideoSlider, ColorTempSlider, ElidedTitleLabel, DragSpacer, makeCenteredEmojiIcon
+from QtTools import SliderThread, installSigIntHandler, VolumeSlider, BrightnessSlider, VideoSlider, ColorTempSlider, ElidedTitleLabel, DragSpacer, makeCenteredEmojiIcon, VOLUME_MAX
 from Slideshow import ImageOverlay, SlideshowController, PICTURE_EXTENSIONS
 import Playlist
 from Playlist import PlaylistPanel, PlaylistManager, PLAYLIST_EXTENSIONS, MEDIA_EXTENSIONS
@@ -76,7 +76,7 @@ class Player(QOpenGLWidget):
     itemEnded = pyqtSignal()  # current track played to its end (mpv thread -> queued)
     mouseActive = pyqtSignal()  # mouse moved over the video surface
     overlayRaised = pyqtSignal()  # z-order of the video overlays changed
-    volumeChanged = pyqtSignal(int, bool)  # (volume 0-100, is_muted)
+    volumeChanged = pyqtSignal(int, bool)  # (volume 0-VOLUME_MAX, is_muted)
     brightnessChanged = pyqtSignal(int)  # (brightness -50 to 50)
     colorTempChanged = pyqtSignal(int)  # (temperature in Kelvin 3000-10000)
     speedChanged = pyqtSignal(float)  # (playback speed 0.1 to 10.0)
@@ -645,7 +645,7 @@ class Player(QOpenGLWidget):
 
     def setVolume(self, val):
         if self.mpv is not None:
-            self.mpv.volume = max(0, min(100, val))
+            self.mpv.volume = max(0, min(VOLUME_MAX, val))
             if val > 0 and self.isMuted():
                 self.setMuted(False)
             else:
@@ -789,6 +789,7 @@ class Player(QOpenGLWidget):
             "cache" : 'yes',
             "demuxer_seekable_cache" : 'yes',
             "volume" : 100,
+            "volume_max" : VOLUME_MAX,
             "audio-display":"embedded-first",
             "opengl_early_flush":'yes',
             "image_display_duration": "inf"
@@ -1880,7 +1881,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.volumeSlider.blockSignals(True)
         self.volumeSlider.setValue(vol)
         self.volumeSlider.blockSignals(False)
-        self.volumeSlider.setToolTip(f"Volume: {vol}%")
+        boost = " (boost)" if vol > 100 else ""
+        self.volumeSlider.setToolTip(f"Volume: {vol}%{boost}")
         if is_muted or vol == 0:
             self.btnVolume.setIcon(self._volIcons["mute"])
         elif vol < 50:
