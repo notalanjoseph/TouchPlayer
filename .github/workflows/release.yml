@@ -107,3 +107,31 @@ jobs:
           gh release create "${{ github.ref_name }}" dist/*.deb dist/*.tar.gz dist/SHA256SUMS \
             --title "TouchPlayer ${{ github.ref_name }}" \
             --generate-notes
+
+  snap:
+    name: Build & Publish Snap
+    needs: build-and-release  # only once the tests passed and the GitHub release exists
+    runs-on: ubuntu-24.04     # matches the snap's core24 base, so it can build on the runner itself
+    env:
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Check the tag matches the source version
+        run: |
+          # The snap takes its version from src/EasyPlayer.py; the deb and tarball from the tag
+          SOURCE=$(sed -n 's/^Version = "\(.*\)"/\1/p' src/EasyPlayer.py)
+          [ "v$SOURCE" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME but src/EasyPlayer.py says $SOURCE"; exit 1; }
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Build snap
+        run: sudo snapcraft pack --destructive-mode
+
+      # Skipped until the store name is registered and the secret exists; the build above still runs
+      - name: Upload to the Snap Store (edge channel)
+        if: env.SNAPCRAFT_STORE_CREDENTIALS != ''
+        run: snapcraft upload --release=edge touchplayer_*.snap

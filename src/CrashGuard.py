@@ -195,8 +195,11 @@ def _scrub(text, media):
         name = os.path.basename(media.rstrip("/"))
         if name:  # replacing "" would put <media> between every character
             text = text.replace(name, "<media>")
-    home = os.path.expanduser("~")
-    return text.replace(home, "~") if home and home != "/" else text
+    # Inside a snap, HOME is a private ~/snap/... folder; SNAP_REAL_HOME is the one with the user's name in it
+    for home in (os.environ.get("SNAP_REAL_HOME"), os.path.expanduser("~")):
+        if home and home != "/":
+            text = text.replace(home, "~")
+    return text
 
 
 def crashingThreadFirst(trace):

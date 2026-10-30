@@ -16,6 +16,10 @@ eggs/
 .eggs/
 lib64/
 parts/
+# snapcraft build output
+/stage/
+/prime/
+*.snap
 sdist/
 var/
 wheels/

@@ -1,0 +1,78 @@
+name: touchplayer
+title: TouchPlayer
+summary: Gesture-driven media player for Wayland touchscreens
+description: |
+  A lightweight, gesture-driven Wayland media player for Linux touchscreen
+  laptops and 2-in-1 devices, built on libmpv and Qt6.
+
+  - Two-finger pinch-to-zoom and pan, double tap to reset the zoom
+  - Large touch-friendly window controls and a fullscreen on-screen display
+  - Speed, brightness and colour temperature controls
+  - Bluetooth headset and media key control (MPRIS)
+
+  TouchPlayer is derived from EasyPlayer by Kanehekili.
+
+  To open files on USB drives or other mounted media, run once:
+  sudo snap connect touchplayer:removable-media
+website: https://github.com/notalanjoseph/TouchPlayer
+source-code: https://github.com/notalanjoseph/TouchPlayer
+issues: https://github.com/notalanjoseph/TouchPlayer/issues
+license: GPL-2.0-or-later
+icon: snap/gui/touchplayer.png
+
+base: core24
+grade: stable
+confinement: strict
+adopt-info: app
+
+platforms:
+  amd64:
+
+slots:
+  mpris:
+    interface: mpris
+    name: touchplayer  # Mpris.py registers org.mpris.MediaPlayer2.touchplayer
+
+apps:
+  touchplayer:
+    command: bin/touchplayer  # snap/gui/touchplayer.desktop is picked up automatically
+    extensions: [gnome]  # desktop launch, Wayland/X11/OpenGL plugs, fonts, GPU and VA-API drivers
+    environment:
+      # Ubuntu's Qt, libmpv and FFmpeg sit under $SNAP/usr here; their built-in paths point at the host's /usr
+      LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/blas:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/lapack:$LD_LIBRARY_PATH
+      QT_PLUGIN_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qt6/plugins
+    plugs:
+      - home
+      - removable-media
+      - network
+      - audio-playback
+    slots:
+      - mpris
+
+parts:
+  # The app's own files. Kept apart from the runtime libraries: a part's stage filter covers its stage-packages too.
+  app:
+    plugin: dump
+    source: .
+    organize:
+      src: opt/touchplayer
+      snap/local/touchplayer: bin/touchplayer
+    stage:
+      - opt/touchplayer
+      - bin/touchplayer
+      - -opt/touchplayer/__pycache__
+      - -opt/touchplayer/lib/__pycache__
+    override-build: |
+      craftctl default
+      craftctl set version="$(sed -n 's/^Version = "\(.*\)"/\1/p' src/EasyPlayer.py)"
+
+  # PyQt6 from the Ubuntu archive, never pip wheels (AGENTS.md packaging policy)
+  runtime:
+    plugin: nil
+    stage-packages:
+      - python3
+      - python3-pyqt6
+      - qt6-wayland  # native Wayland; never force xcb (AGENTS.md)
+      - libmpv2
+      - ffmpeg
+      # No VA-API drivers here: the gnome extension's GPU content snap provides ones matching its Mesa and libva

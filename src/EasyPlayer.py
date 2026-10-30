@@ -1481,7 +1481,8 @@ def main():
         # Set the application name (this sets WM_CLASS)
         app.setApplicationName(AppName)
         # Link to your desktop file (important for GNOME)
-        app.setDesktopFileName(AppName)       
+        # The Wayland app_id must match the launcher's file name; snapd names it <snap>_<app>.desktop
+        app.setDesktopFileName("%s_touchplayer" % os.environ["SNAP_NAME"] if os.environ.get("SNAP_NAME") else AppName)
         
         locale.setlocale(locale.LC_NUMERIC, "C")
         fn = res["file"]

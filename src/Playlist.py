@@ -12,6 +12,7 @@
 
 from PyQt6 import QtWidgets, QtGui
 from PyQt6.QtCore import pyqtSignal
+import os
 import re
 import xml.etree.ElementTree as ET
 import FFMPEGTools
@@ -59,7 +60,8 @@ def _getLastDir():
             return stored
     except Exception:
         pass
-    return OSTools().getHomeDirectory()
+    # Inside a snap, HOME is a private, empty ~/snap/... folder; start the file dialog in the real one
+    return os.environ.get("SNAP_REAL_HOME") or OSTools().getHomeDirectory()
 
 
 def _setLastDir(path):

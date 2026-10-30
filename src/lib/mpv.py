@@ -69,6 +69,16 @@ else:
 
     sofile = ctypes.util.find_library('mpv')
     if sofile is None:
+        # TouchPlayer: find_library only reads the system ld.so cache. Inside a snap that misses the bundled
+        # libmpv, while a plain dlopen by soname honours LD_LIBRARY_PATH.
+        for candidate in ('libmpv.so.2', 'libmpv.so.1'):
+            try:
+                CDLL(candidate)
+                sofile = candidate
+                break
+            except OSError:
+                pass
+    if sofile is None:
         raise OSError("Cannot find libmpv in the usual places. Depending on your distro, you may try installing an mpv-devel or mpv-libs package. If you have libmpv around but this script can't find it, consult the documentation for ctypes.util.find_library which this script uses to look up the library filename.")
     backend = CDLL(sofile)
     fs_enc = sys.getfilesystemencoding()
