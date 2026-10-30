@@ -95,6 +95,8 @@ class Player(QOpenGLWidget):
         self._singleTouchDrag = None
         self._lastTapTime = 0
         self._lastTapPos = None
+        self._touchStartTime = 0
+        self._touchStartPos = None
 
     def initializeGL(self) -> None:
         self.ctx = MpvRenderContext(
@@ -258,7 +260,11 @@ class Player(QOpenGLWidget):
             self._touchMoved = True
             self.restoreCursor()
             if was_tap and event.type() != QtCore.QEvent.Type.TouchCancel:
+                if self._completeTap():
+                    return True  # the double tap reset the zoom; not a single tap as well
                 self.videoSurfaceTapped.emit(osd_was_vis)
+            else:
+                self._lastTapPos = None  # a drag or pinch breaks any double tap in progress
             return True
 
         if len(active_points) >= 2:
@@ -274,7 +280,6 @@ class Player(QOpenGLWidget):
                 self._prevTouchDist = dist
                 self._prevTouchMid = (midX, midY)
                 self._singleTouchDrag = None
-                self._lastTapTime = 0
                 self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
                 return True
 
@@ -312,19 +317,6 @@ class Player(QOpenGLWidget):
                 topBar = getattr(self, '_osdTopBar', None)
                 self._osdVisibleAtTouch = bool((osd and osd.isVisible()) or (topBar and topBar.isVisible()))
 
-                if self._lastTapPos is not None:
-                    dist_tap = math.hypot(pos.x() - self._lastTapPos.x(), pos.y() - self._lastTapPos.y())
-                    if (now - self._lastTapTime) < 0.35 and dist_tap < 35:
-                        if self.zoomCtrl.isActive():
-                            self.zoomCtrl.resetZoom()
-                            self._touchMoved = True
-                        self._lastTapTime = 0
-                        self._lastTapPos = None
-                        self._singleTouchDrag = None
-                        return True
-                self._lastTapTime = now
-                self._lastTapPos = QtCore.QPointF(pos)
-
                 if self.zoomCtrl.isActive():
                     self._singleTouchDrag = pos
                     self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
@@ -338,13 +330,28 @@ class Player(QOpenGLWidget):
                     if self._singleTouchDrag is not None:
                         dx = pos.x() - self._singleTouchDrag.x()
                         dy = pos.y() - self._singleTouchDrag.y()
-                        if math.hypot(dx, dy) > 10:
-                            self._lastTapTime = 0
                         self.zoomCtrl.panBy(dx, dy)
                     self._singleTouchDrag = pos
                     self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
                 return True
 
+        return False
+
+    def _completeTap(self):
+        """A tap just lifted. Pairs it with the previous tap into a double tap, judged on release.
+        Deciding at touch-down reset the zoom when a pan or pinch began right after a tap.
+        Returns True when the double tap reset the zoom."""
+        start, startTime = self._touchStartPos, self._touchStartTime
+        last = self._lastTapPos
+        if last is not None and (startTime - self._lastTapTime) < 0.35 \
+                and math.hypot(start.x() - last.x(), start.y() - last.y()) < 35:
+            self._lastTapPos = None
+            if self.zoomCtrl.isActive():
+                self.zoomCtrl.resetZoom()
+                return True
+            return False
+        self._lastTapTime = startTime
+        self._lastTapPos = QtCore.QPointF(start)
         return False
 
     def wheelEvent(self, event):

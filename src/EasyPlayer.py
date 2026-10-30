@@ -664,10 +664,7 @@ class MainFrame(QtWidgets.QMainWindow):
 
         def onToolbarDbl(event):
             if event.button() == QtCore.Qt.MouseButton.LeftButton:
-                if self._fullscreen:
-                    self._setNormalScreen()
-                else:
-                    self._setFullscreen()
+                self._toggleFullscreen()
                 event.accept()
                 return
             origDbl(event)

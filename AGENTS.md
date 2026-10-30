@@ -52,7 +52,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
   - **Two fingers:** Tracks distance and midpoint delta. Continuously updates zoom and pan via `zoomCtrl.pinchZoom(...)`.
   - **One finger (zoomed in):** Pans the zoomed view continuously via `zoomCtrl.panBy(...)`.
   - **One finger (not zoomed in):** Passes through to standard Qt mouse events for transport control, scrubbing, and OSD interaction.
-  - **Double-tap on video surface:** Instantly resets zoom back to 100%.
+  - **Double-tap on video surface:** When zoomed in, resets zoom back to 100%. Judged when the second tap lifts, and only if neither touch moved or pinched, so a pan or pinch right after a tap never resets the zoom (`Player._completeTap`).
   - **Single-tap (fullscreen):** Toggles OSD visibility on/off.
 
 ---
@@ -134,7 +134,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
 - **Fast Targeted Testing:**
   - Do **not** run the full test suite after routine edits; only run targeted tests for touched code to keep test execution under 0.1s:
     ```bash
-    PYTHONPATH=tests:src python3 -m unittest tests/test_pinch.py tests/test_volume.py tests/test_brightness.py tests/test_fullscreen_topbar.py tests/test_title.py tests/test_videoslider.py
+    PYTHONPATH=tests:src python3 -m unittest tests/test_pinch.py tests/test_doubletap.py tests/test_volume.py tests/test_brightness.py tests/test_fullscreen_topbar.py tests/test_title.py tests/test_videoslider.py
     ```
 - **Execution Environment:**
   - If running commands in isolated sandboxes where container socket connections encounter issues, execute directly on the host (bypass sandbox).
@@ -147,3 +147,17 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
   3. **Reset:** Double-tap video surface resets zoom to 100%.
   4. **Fullscreen Tap:** Single tap shows/hides OSD (hides after 6s of inactivity).
   5. **HeaderBar:** Drag top bar to move window; double-click/tap top bar to maximize/restore.
+
+---
+
+## Workflow
+
+- **Commits:** Commit directly on `main`; do not create feature branches. Never push unless the maintainer asks.
+
+- **Self-Review After Moderate or Larger Changes:**
+  - After a new feature, a bug fix touching logic or several files, or a refactor, run a code review of the diff before reporting the work as done (in Claude Code: `/code-review`). Skip it for tiny tweaks, styling and docs.
+  - Verify each finding against the code first: reviewer claims in this project have sometimes been wrong or overstated.
+  - **Fix without asking:** clear bugs in the new code, leftovers (dead code, unused imports, wrong comments) and other low-risk tidy-ups. Re-run the affected tests afterwards.
+  - **Ask the maintainer:** anything that changes behaviour a user would notice, or a design choice with real trade-offs.
+  - **Skip, but mention in one line:** rare edge cases, such as narrow timing windows or hand-corrupted config files.
+  - In the final report, list what the review found, what was fixed, what was skipped and why, and what needs a decision.
