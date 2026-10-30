@@ -23,6 +23,7 @@ from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import FFStreamProbe, OSTools
 import FFMPEGTools, math, time
 import CrashGuard
+import ColorTemp
 from threading import Condition
 from QtTools import SliderThread, ColorTempSlider, VOLUME_MAX
 from Slideshow import ImageOverlay, PICTURE_EXTENSIONS
@@ -67,6 +68,10 @@ class Player(QOpenGLWidget):
         self._timePos = 0;
         self.streamData = None
         self._demuxOffset = 0.1
+        self._isVirtual = isVirtual  # gpu-dumb-mode: mpv runs no user shaders there
+        self._appliedColorTemp = ColorTempSlider.DEFAULT_TEMP  # what mpv currently shows, rounded
+        self._colorTempShader = None   # our entry in mpv's glsl-shaders list, if any
+        self._colorTempFilter = False  # whether the @colortemp vf fallback is in place
         self.mpv = MPV(**self._getMPVArgs(isVirtual))
         self.filePath = path
         self.isPlaylist = False
@@ -686,13 +691,46 @@ class Player(QOpenGLWidget):
         self._colorTemp = temp_k
         if self.mpv is not None:
             try:
-                if temp_k == ColorTempSlider.DEFAULT_TEMP:
-                    self.mpv.command('vf', 'remove', '@colortemp')
-                else:
-                    self.mpv.command('vf', 'set', f'@colortemp:colortemperature=temperature={temp_k}:pl=0.5')
+                self._applyColorTemperature(temp_k)
             except Exception:
                 pass
         self.colorTempChanged.emit(self.getColorTemperature())
+
+    def _applyColorTemperature(self, temp_k):
+        """A GPU shader, not FFmpeg's CPU filter, which stuttered on large videos (see ColorTemp).
+        The CPU filter remains for gpu-dumb-mode, which runs no user shaders, and if no shader file can be written."""
+        kelvin = ColorTemp.quantise(temp_k)
+        if kelvin == self._appliedColorTemp:
+            return  # dragging within one 50K step: nothing for mpv to redo
+        neutral = kelvin == ColorTempSlider.DEFAULT_TEMP
+        shader = None
+        if not neutral and not self._isVirtual:
+            try:
+                shader = ColorTemp.shaderPath(kelvin)
+            except OSError as error:
+                Log.warning("Colour temperature shader unavailable, using the CPU filter: %s", error)
+        self._setColorTempShader(shader)
+        self._setColorTempFilter(None if neutral or shader else kelvin)
+        self._appliedColorTemp = kelvin
+
+    def _setColorTempShader(self, path):
+        """Touch only our own entry, so any other shader in the list survives"""
+        if path == self._colorTempShader:
+            return
+        if self._colorTempShader:
+            self.mpv.command('change-list', 'glsl-shaders', 'remove', self._colorTempShader)
+        if path:
+            # append adds one item; set would split a path containing ':' into several
+            self.mpv.command('change-list', 'glsl-shaders', 'append', path)
+        self._colorTempShader = path
+
+    def _setColorTempFilter(self, kelvin):
+        if kelvin is not None:
+            self.mpv.command('vf', 'set', f'@colortemp:colortemperature=temperature={kelvin}:pl=0.5')
+            self._colorTempFilter = True
+        elif self._colorTempFilter:
+            self.mpv.command('vf', 'remove', '@colortemp')
+            self._colorTempFilter = False
 
     def getColorTemperature(self):
         return getattr(self, '_colorTemp', ColorTempSlider.DEFAULT_TEMP)

@@ -66,8 +66,8 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
 
 - **Color Temperature (`ColorTempSlider` in `src/QtTools.py`):**
   - Range: `5000K` (warm) to `9000K` (cool), default `6500K` (neutral).
-  - Managed via mpv video filter `@colortemp:colortemperature=temperature=<K>:pl=0.5`.
-  - Filter is cleanly removed at default 6500K for zero processing overhead.
+  - Applied as a GPU user shader (`src/ColorTemp.py`), the same maths as FFmpeg's `colortemperature` filter with `pl=0.5`. See gotcha #6.
+  - The shader is removed at the default 6500K (rounded to 50K) for zero processing overhead.
 
 - **Brightness Control (`BrightnessSlider` in `src/QtTools.py`):**
   - Clamped to `[-30, 30]` (default 0) to avoid blown-out white or complete blackouts.
@@ -102,9 +102,10 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
 - **Quirk:** MPV property observers (e.g., `_onMpvSpeed`, `_onMpvBrightness`, `_onMpvVolume`) run on MPV's background thread, not the Qt GUI thread.
 - **Solution:** Never call UI widget methods directly from MPV observer callbacks. Always emit PyQt signals (`speedChanged`, `volumeChanged`, etc.), which automatically transition across the thread boundary via Qt's queued connection mechanism. Always guard with `if not self.closePending:` to avoid teardown crashes.
 
-### 6. Mpv Filter Updates via Labeled Chains (`@colortemp`)
-- **Quirk:** Appending filters generically to mpv's `vf` string causes stacking duplicates and leaks memory on continuous slider movement.
-- **Solution:** Always label dynamic filters with `@name`: `self.mpv.command('vf', 'set', f'@colortemp:colortemperature=temperature={val}:pl=0.5')`. This replaces the filter in-place. Remove cleanly with `self.mpv.command('vf', 'remove', '@colortemp')` at neutral default.
+### 6. Picture Effects Belong on the GPU, Not in `vf` (`ColorTemp.py`)
+- **Quirk:** FFmpeg video filters (`vf`) run on the CPU for every pixel of every frame, and force hardware-decoded frames back to the CPU. The old `colortemperature` filter stuttered heavily on large videos.
+- **Solution:** Colour temperature is a tiny mpv user shader (`glsl-shaders`). libmpv's render API uses mpv's older `gpu` renderer: it has no runtime shader parameters (`--glsl-shader-opts` is `gpu-next` only) and caches shader files by path. So `ColorTemp.shaderPath` writes one file per temperature (rounded to 50K, named with a hash of its source) into a per-user folder, and `Player` swaps only its own entry with `change-list glsl-shaders remove`/`append`.
+- **Exception:** software render (`gpu-dumb-mode`) runs no user shaders, so it keeps the labelled filter `@colortemp:colortemperature=...`. Always label `vf` filters with `@name` so `vf set` replaces them in place instead of stacking duplicates.
 
 ### 7. FreeType Emoji Vertical Centering (`makeCenteredEmojiIcon`)
 - **Quirk:** On Linux FreeType/FontConfig, drawing emoji glyphs (like 🌡️ or 🔊) directly as text or in standard `QIcon` results in severe vertical misalignment due to font ascender/descender metrics.
@@ -139,7 +140,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
 - **Fast Targeted Testing:**
   - Do **not** run the full test suite after routine edits; only run targeted tests for touched code to keep test execution under 0.1s:
     ```bash
-    PYTHONPATH=tests:src python3 -m unittest tests/test_pinch.py tests/test_doubletap.py tests/test_volume.py tests/test_brightness.py tests/test_fullscreen_topbar.py tests/test_title.py tests/test_videoslider.py
+    PYTHONPATH=tests:src python3 -m unittest tests/test_pinch.py tests/test_doubletap.py tests/test_colortemp.py tests/test_volume.py tests/test_brightness.py tests/test_fullscreen_topbar.py tests/test_title.py tests/test_videoslider.py
     ```
 - **Execution Environment:**
   - If running commands in isolated sandboxes where container socket connections encounter issues, execute directly on the host (bypass sandbox).

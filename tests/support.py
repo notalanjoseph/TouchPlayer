@@ -37,12 +37,16 @@ def app():
 
 
 def _isolateConfig():
-    """Point ep.ini at a throwaway home folder for the whole run.
+    """Point ep.ini and the colour-temperature shaders at a throwaway folder for the whole run.
     Windows save volume and picture settings on close, which must never reach the user's real config."""
     import FFMPEGTools
+    import ColorTemp
     home = tempfile.mkdtemp(prefix='easyplayer-config-')
     atexit.register(shutil.rmtree, home, True)
     FFMPEGTools.ConfigAccessor.homeDir = home
+    shaders = os.path.join(home, 'shaders')
+    os.makedirs(shaders)
+    ColorTemp.shaderDir = lambda: shaders  # colour-temperature shaders, normally in XDG_RUNTIME_DIR
 
 
 def spin(ms):
