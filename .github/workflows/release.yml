@@ -82,12 +82,12 @@ jobs:
           # Binary wrapper script
           cat << 'EOF' > "${PKG_DIR}/usr/local/bin/touchplayer"
           #!/bin/bash
-          exec python3 /opt/touchplayer/EasyPlayer.py "$@"
+          exec /usr/bin/python3 /opt/touchplayer/EasyPlayer.py "$@"
           EOF
           chmod 755 "${PKG_DIR}/usr/local/bin/touchplayer"
 
           # Desktop launcher
-          cp build/TouchPlayer.desktop "${PKG_DIR}/usr/share/applications/TouchPlayer.desktop"
+          cp packaging/TouchPlayer.desktop "${PKG_DIR}/usr/share/applications/TouchPlayer.desktop"
           chmod 644 "${PKG_DIR}/usr/share/applications/TouchPlayer.desktop"
 
           # Build .deb archive

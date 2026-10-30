@@ -3,7 +3,7 @@
 Encoding=UTF-8
 Version=1.0
 Type=Application
-Exec=/opt/touchplayer/EasyPlayer.py %f
+Exec=/usr/local/bin/touchplayer %f
 Name=TouchPlayer
 GenericName=TouchPlayer
 Comment=Gesture-driven Wayland media player
