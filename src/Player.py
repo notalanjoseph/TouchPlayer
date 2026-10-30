@@ -31,6 +31,11 @@ from Playlist import PlaylistManager, PLAYLIST_EXTENSIONS
 
 Log = FFMPEGTools.Log
 
+# Codecs mpv may decode on the GPU: mpv 0.37's own safe default list, minus AV1.
+# Hardware AV1 crashes some drivers outright (Intel Iris Xe, VA-API: "internal decoding error", then a segfault).
+# dav1d decodes AV1 on the CPU comfortably, as VLC does. Set once at start-up: mpv picks the decoder on load.
+HWDEC_CODECS = "h264,vc1,hevc,vp8,vp9"
+
 
 def get_process_address(_, name):
     glctx = QOpenGLContext.currentContext()
@@ -134,11 +139,7 @@ class Player(QOpenGLWidget):
             return True
 
     def _tweak(self, streamData):
-        if streamData.isVC1Codec():
-            self.mpv.hwdec_codecs = "vc1"
-            Log.info("Optimized for VC1")
-        else:
-            self.mpv.hwdec_codecs = "all"
+        # No hwdec-codecs here: by now the decoder is open, so a change only hit the next file
         interlaced = streamData.interlaced
         if streamData.isTransportStream() or interlaced:
             Log.info("Transport stream. Setting seek offset to high and interlacing: %d"%(interlaced))
@@ -798,19 +799,9 @@ class Player(QOpenGLWidget):
             self.mpv = None
         event.accept()
 
-    def _getMPVArgsEasy(self,isVirtual):
-        kwArgs = {"hwdec":"auto-safe", "log_handler":self._passLog, "loglevel": 'error', "pause":False, "audio": "1", "keep_open": "always", "vo":"libmpv",
-                "input_vo_keyboard": False, "video-latency-hacks": "yes", "hr_seek": 'yes', "hr_seek_demuxer_offset": self._demuxOffset,  # below is test
-                "demuxer_max_back_bytes":'150M', "demuxer_max_bytes":'150M', "demuxer_cache_wait":'no', "stream_buffer_size":'255MiB',
-                "audio-display":"embedded-first"
-                }
-        if isVirtual:
-            kwArgs['gpu-dumb-mode'] = 'yes'
-            kwArgs['vd-lavc-dr'] = 'no'
-        return kwArgs
-    
     def _getMPVArgs(self,isVirtual):
         kwArgs= {"hwdec":"auto-safe",
+            "hwdec_codecs": HWDEC_CODECS,
             "vo":"libmpv", #depends on backend - see below                
             "log_handler":self._passLog,
             "loglevel" : 'error',

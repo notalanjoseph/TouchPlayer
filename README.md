@@ -1,6 +1,6 @@
 # TouchPlayer
 
-A lightweight, gesture-driven Wayland media player for Linux touchscreen laptops and 2-in-1 devices.
+A lightweight, gesture-driven Wayland media player for Linux touchscreen devices.
 
 *TouchPlayer is a touch-first derivative forked from [EasyPlayer](https://github.com/kanehekili/EasyPlayer) by Kanehekili.*
 
@@ -10,7 +10,7 @@ A lightweight, gesture-driven Wayland media player for Linux touchscreen laptops
 
 Most desktop Linux media players are designed strictly for traditional mouse and keyboard setups. On modern touchscreen laptops running Wayland, pinch-to-zoom is typically unsupported, window controls are too small to tap reliably, and UI fails to accommodate touch interactions.
 
-**TouchPlayer** reimagines the player experience with **native Wayland multi-touch ergonomics**, fluid gesture controls, client-side window management, and picture adjustments - all powered by the high-performance `libmpv` and Qt6 OpenGL engine.
+**TouchPlayer** reimagines the player experience with fluid gesture controls, client-side window management, and picture adjustments - all powered by the high-performance `libmpv` and Qt6 OpenGL engine.
 
 ---
 
