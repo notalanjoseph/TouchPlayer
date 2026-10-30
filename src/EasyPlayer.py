@@ -59,7 +59,7 @@ AppName="TouchPlayer"
 Log = FFMPEGTools.Log
 AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "audio.png")
 #####################################################
-Version = "1.1.1"
+Version = "1.2.0"
 #####################################################
 Settings.init(AppName, Version)
 
