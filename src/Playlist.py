@@ -69,8 +69,7 @@ def _setLastDir(path):
     if d and _ostools.isDirectory(d):
         _lastDir = d
         try:
-            _ep_config.set("lastDir", d)
-            _ep_config.store()
+            _ep_config.update({"lastDir": d})
         except Exception:
             pass
 

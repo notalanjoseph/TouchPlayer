@@ -496,6 +496,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self._onPlayerColorTempChanged(self.player.getColorTemperature())
         self.player.speedChanged.connect(self._onPlayerSpeedChanged)
         self._onPlayerSpeedChanged(self.player.getSpeed())
+        self._restorePlayerSettings()  # after the connects, so the sliders follow the restored values
         self.applyTheme(self.settings.getTheme())
 
     @pyqtSlot(str)
@@ -1289,7 +1290,35 @@ class MainFrame(QtWidgets.QMainWindow):
             return
         self.setWindowLabel(title)
 
+    # Speed and mute are left out on purpose: starting at 2x or muted looks broken.
+    # A volume of 0 is the user's own choice and is restored as is.
+    _PLAYER_SETTINGS = (
+        ("volume", Player.getVolume, Player.setVolume),
+        ("brightness", Player.getBrightness, Player.setBrightness),
+        ("colortemp", Player.getColorTemperature, Player.setColorTemperature),
+    )
+
+    def _restorePlayerSettings(self):
+        """last session's volume and picture; the setters clamp out-of-range values"""
+        cfg = Settings.config()
+        for key, _get, put in self._PLAYER_SETTINGS:
+            try:
+                val = cfg.getInt(key)
+            except ValueError:
+                Log.warning("Ignoring unreadable %s in ep.ini", key)
+                continue
+            if val is not None:
+                put(self.player, val)
+
+    def _savePlayerSettings(self):
+        mpv = self.player.mpv
+        if mpv is None or mpv.core_shutdown:
+            return  # the getters would answer with defaults, overwriting the user's values
+        values = {key: get(self.player) for key, get, _put in self._PLAYER_SETTINGS}
+        Settings.config().update(values)
+
     def closeEvent(self, __event: QCloseEvent) -> None:
+        self._savePlayerSettings()  # before teardown, while mpv still answers
         self.player.closePending = True
         if hasattr(self, 'mpris'):
             self.mpris.close()

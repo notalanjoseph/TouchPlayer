@@ -62,34 +62,18 @@ class SettingsModel(QtCore.QObject):
         self.slideDuration = ep_config.getInt("slideDuration", SLIDE_DURATION)
         self.isoCodes = []
     
-    def sync(self):
-        ep_config = config()
-        if self.showSubs:
-            ep_config.set("subtitles", "True")
-        else:
-            ep_config.set("subtitles", "False")
-        
-        ep_config.set("softwareRender", str(self.softwareRender))
-        ep_config.set("slideDuration", str(self.slideDuration))
-        ep_config.set("theme", self.iconSet)
-        ep_config.set("icoSet", self.iconSet)
-        
-    def __update(self):
-        self.sync()        
-        config().store()
-        
     def hasSubtitles(self):
         return self.showSubs
         
     def setSubtitle(self, aBool):
         self.showSubs = aBool
-        self.__update()
+        config().update({"subtitles": str(bool(aBool))})
         self.changeSub.emit(aBool)   
         
     def setIconSet(self, icoType):
         normalized = IconMapper._normalizeTheme(icoType)
         self.iconSet = normalized
-        self.__update()
+        config().update({"theme": normalized, "icoSet": normalized})
         self.changeTheme.emit(self.iconSet)
 
     def setTheme(self, theme):
@@ -103,14 +87,14 @@ class SettingsModel(QtCore.QObject):
 
     def setSoftwareRender(self, aBool):
         self.softwareRender = aBool
-        self.__update()
+        config().update({"softwareRender": str(aBool)})
 
     def getSlideDuration(self):
         return self.slideDuration
 
     def setSlideDuration(self, seconds):
         self.slideDuration = seconds
-        self.__update()
+        config().update({"slideDuration": str(seconds)})
         self.changeSlideDuration.emit(seconds)
 
 class SettingsDialog(QtWidgets.QDialog):

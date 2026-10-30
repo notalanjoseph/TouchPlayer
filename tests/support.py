@@ -28,11 +28,21 @@ def app():
     """one QApplication for the whole suite"""
     global _app
     if _app is None:
+        _isolateConfig()
         _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         # QApplication picks up the system locale; libmpv insists on C numerics.
         # EasyPlayer.main() does exactly this after creating the app.
         locale.setlocale(locale.LC_NUMERIC, "C")
     return _app
+
+
+def _isolateConfig():
+    """Point ep.ini at a throwaway home folder for the whole run.
+    Windows save volume and picture settings on close, which must never reach the user's real config."""
+    import FFMPEGTools
+    home = tempfile.mkdtemp(prefix='easyplayer-config-')
+    atexit.register(shutil.rmtree, home, True)
+    FFMPEGTools.ConfigAccessor.homeDir = home
 
 
 def spin(ms):

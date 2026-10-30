@@ -25,6 +25,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 from itertools import tee
 import configparser
+import contextlib
+import fcntl
+import stat
 import gzip
 
 BIN = "ffmpeg"
@@ -304,17 +307,44 @@ class ConfigAccessor():
         return default
 
 
-    def store(self):
+    def update(self, values):
+        """Write only these keys, keeping whatever other processes saved since our read.
+        Several windows share one file, so writing our whole stale copy would revert their changes."""
         try:
-            folder = os.path.dirname(self._path)
-            if not os.path.exists(folder):
-                os.makedirs(folder, exist_ok=True)
-            with open(self._path, 'w') as aFile:
-                self.parser.write(aFile)
-        except IOError:
+            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+            # A sibling lock file: the atomic replace below swaps the inode of the ini itself
+            with open(self._path + ".lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                self.parser.read(self._path)
+                for key, value in values.items():
+                    self.parser.set(self.__SECTION, key, str(value))
+                self._replaceFile()
+        except (OSError, configparser.Error) as error:
+            Log.warning("Could not save %s to %s: %s", sorted(values), self._path, error)
             return False
         return True
 
+    def _replaceFile(self):
+        """Write to a temp file, then swap it in, so readers never see a half-written file.
+        A symlinked ep.ini (dotfiles) is followed, and its permissions are kept."""
+        target = os.path.realpath(self._path)
+        tmp = os.path.join(os.path.dirname(target), "." + os.path.basename(target) + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)  # umask applies, as for a plain open()
+        try:
+            with os.fdopen(fd, "w") as aFile:
+                fd = None  # the file object owns it now
+                if os.path.exists(target):
+                    os.fchmod(aFile.fileno(), stat.S_IMODE(os.stat(target).st_mode))
+                self.parser.write(aFile)
+                aFile.flush()
+                os.fsync(aFile.fileno())  # on disk before the rename, or a power cut can leave it empty
+            os.replace(tmp, target)
+        except BaseException:
+            if fd is not None:
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
 
 
 Log=logging.getLogger("Main")
