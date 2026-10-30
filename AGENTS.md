@@ -114,7 +114,12 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
 - **Quirk:** Styling `QMainWindow { border-radius: 10px; }` on Wayland leaves black rectangular corners because the underlying Wayland subsurface is opaque.
 - **Solution:** `WA_TranslucentBackground` is set on both `MainFrame` and `CentralWidget`. The top toolbar (`10px` top corners) and `ui_BottomBar` (`10px` bottom corners) draw the visual window boundary. Fullscreen mode switches these radii back to `0px`.
 
-### 9. Packaging & Release Policy (Strictly No Python Wheels / PyPI)
+### 9. Crash Supervisor (`src/CrashGuard.py`)
+- **Quirk:** A native crash (segfault in libmpv or the GPU driver) kills the process outright, so it cannot report itself.
+- **Solution:** Run as a script, `EasyPlayer.py` re-launches itself as a child of a small supervisor before any heavy import. When the child dies from a crash signal, the supervisor shows an Apport-style dialog that can open a pre-filled GitHub issue. The report holds the media's format (via `ffprobe`) but never its name or path.
+- Set `TOUCHPLAYER_NO_SUPERVISOR=1` to run unsupervised, e.g. under `gdb`. Importing `EasyPlayer` (as the tests do) never starts the supervisor.
+
+### 10. Packaging & Release Policy (Strictly No Python Wheels / PyPI)
 - **Rule:** **NEVER build, distribute, or attach Python wheels (`.whl`) to GitHub releases**, and do not recommend `pip install` for end users.
 - **Why:** TouchPlayer is a standalone desktop GUI application requiring system shared C-libraries (`libmpv.so.2`, `ffmpeg`) and system desktop integration (XDG `.desktop` launcher, application menu icons, MIME type associations). Python wheels cannot resolve system C-libraries, are blocked by PEP 668 ("externally-managed-environment") on modern Linux distros, and fail to install desktop icons.
 - **Allowed Release Artifacts:**

@@ -22,6 +22,7 @@ from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import FFStreamProbe, OSTools
 import FFMPEGTools, math, time
+import CrashGuard
 from threading import Condition
 from QtTools import SliderThread, ColorTempSlider, VOLUME_MAX
 from Slideshow import ImageOverlay, PICTURE_EXTENSIONS
@@ -123,6 +124,8 @@ class Player(QOpenGLWidget):
             ext = FFMPEGTools.OSTools().getExtension(fn)
             self.isPlaylist = ext.lower() in PLAYLIST_EXTENSIONS
             self.filePath = fn
+            # A playlist's own format says nothing; its entries are noted as they are probed
+            CrashGuard.noteMedia(None if self.isPlaylist else fn)
             return True
 
     def _tweak(self, streamData):
@@ -537,6 +540,7 @@ class Player(QOpenGLWidget):
         if path == getattr(self, '_probedPath', None):
             return
         self._probedPath = path
+        CrashGuard.noteMedia(path)
         self.zoomCtrl.reset()
         self.streamData = None
         try:
@@ -737,6 +741,9 @@ class Player(QOpenGLWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """free mpv_context and terminate player before closing the widget"""
+        # Stop mpv's observer callbacks first: one reading a property during terminate() segfaults.
+        # MainFrame sets this already; a Player closed on its own (as in the tests) did not.
+        self.closePending = True
         if self.ctx is not None:
             try:
                 self.ctx.free()

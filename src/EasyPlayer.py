@@ -22,6 +22,11 @@ https://gitlab.com/robozman/python-mpv-qml-example/-/blob/master/main.py?ref_typ
 
 '''
 
+# Before the heavy imports: as a script, TouchPlayer runs as a child of a crash supervisor.
+import CrashGuard
+if __name__ == '__main__':
+    CrashGuard.superviseOrContinue()
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QCloseEvent
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -36,6 +41,7 @@ import Osd
 from Osd import OsdController
 from Mpris import MprisController
 from Player import Player
+from lib.mpv import MPV_VERSION
 from HeaderBar import (WindowControlGroup, getToolbarWindowedStyle, getToolbarFullscreenStyle,
                        getSeekerRowWindowedStyle, getBottomBarWindowedStyle, STYLE_TOOLBAR_WINDOWED,
                        STYLE_SEEKER_ROW_WINDOWED, STYLE_BOTTOM_BAR_WINDOWED)
@@ -1441,6 +1447,9 @@ def getAppIcon():
 
 
 def main():
+    # First, so a crash while Qt or mpv starts up is still reported with the versions
+    CrashGuard.noteState(version=Version, qt=QtCore.QT_VERSION_STR, pyqt=QtCore.PYQT_VERSION_STR,
+                         mpv="client API %d.%d" % MPV_VERSION)
     try:
         global ICOMAP 
         global WIN 
@@ -1482,6 +1491,7 @@ def main():
             if not OSTools().isAbsolute(fn):
                 fn = OSTools().joinPathes(localPath, fn)
             WIN = MainFrame(app, fn, res['virtual']) 
+        CrashGuard.noteState(mpv=getattr(WIN.player.mpv, 'mpv_version', '?'))
         app.exec()
     except Exception:
         Log.exception("Error in main:")
