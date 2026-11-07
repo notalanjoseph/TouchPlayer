@@ -325,7 +325,10 @@ class MainFrame(QtWidgets.QMainWindow):
 
         self.volumeWidget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
 
-        self.toolbar = self.addToolBar('Main')
+        # Created from Python, not by addToolBar('Main'): PyQt refuses protected calls such as mousePressEvent
+        # on a C++-created object, and the drag handler forwards unhandled presses to it
+        self.toolbar = QtWidgets.QToolBar('Main', self)
+        self.addToolBar(self.toolbar)
         self.toolbar.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         self.toolbar.setMovable(False)
         self.toolbar.setFloatable(False)
