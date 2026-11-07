@@ -131,6 +131,14 @@ jobs:
       - name: Build snap
         run: sudo snapcraft pack --destructive-mode
 
+      # Downloadable from the run's page, to test with snap install --dangerous before the store has it
+      - name: Save the snap
+        uses: actions/upload-artifact@v5
+        with:
+          name: touchplayer-snap
+          path: touchplayer_*.snap
+          if-no-files-found: error
+
       # Skipped until the store name is registered and the secret exists; the build above still runs
       - name: Upload to the Snap Store (edge channel)
         if: env.SNAPCRAFT_STORE_CREDENTIALS != ''

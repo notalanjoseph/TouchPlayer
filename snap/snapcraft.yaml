@@ -23,6 +23,7 @@ icon: snap/gui/touchplayer.png
 base: core24
 grade: stable
 confinement: strict
+compression: lzo  # starts faster than the default xz, at the cost of a larger file
 adopt-info: app
 
 platforms:
