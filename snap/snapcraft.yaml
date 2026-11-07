@@ -40,7 +40,8 @@ apps:
     extensions: [gnome]  # desktop launch, Wayland/X11/OpenGL plugs, fonts, GPU and VA-API drivers
     environment:
       # Ubuntu's Qt, libmpv and FFmpeg sit under $SNAP/usr here; their built-in paths point at the host's /usr
-      LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/blas:$SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/lapack:$LD_LIBRARY_PATH
+      # BLAS and LAPACK come from the GNOME runtime (the cleanup part drops ours), in subfolders it leaves off the path
+      LD_LIBRARY_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$SNAP/gnome-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/blas:$SNAP/gnome-platform/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/lapack:$LD_LIBRARY_PATH
       QT_PLUGIN_PATH: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qt6/plugins
     plugs:
       - home
