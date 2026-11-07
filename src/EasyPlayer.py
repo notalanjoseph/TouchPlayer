@@ -22,9 +22,47 @@ https://gitlab.com/robozman/python-mpv-qml-example/-/blob/master/main.py?ref_typ
 
 '''
 
+import getopt
+import sys
+
+AppName = "TouchPlayer"
+#####################################################
+Version = "1.2.1"
+#####################################################
+
+SHORT_OPTIONS = "cdvhV"
+LONG_OPTIONS = ["console", "debug", "virtual", "help", "version"]
+USAGE = """Usage: touchplayer [OPTION]... [FILE]
+A touch-first media player for Wayland.
+
+  -c, --console    also write the log to the terminal
+  -d, --debug      log debug messages
+  -v, --virtual    software rendering, without the GPU
+  -h, --help       show this help and exit
+  -V, --version    show the version and exit"""
+
+
+def handleInfoOptions(argv):
+    """Answers --help, --version and bad options before Qt, mpv or the crash supervisor load.
+    So they print at once, and work without a display, e.g. over SSH."""
+    try:
+        opts, _ = getopt.getopt(argv[1:], SHORT_OPTIONS, LONG_OPTIONS)
+    except getopt.GetoptError as err:
+        print("touchplayer: %s\nTry 'touchplayer --help' for more information." % err, file=sys.stderr)
+        sys.exit(2)
+    for option, _ in opts:
+        if option in ("-h", "--help"):
+            print(USAGE)
+            sys.exit(0)
+        if option in ("-V", "--version"):
+            print("%s %s" % (AppName, Version))
+            sys.exit(0)
+
+
 # Before the heavy imports: as a script, TouchPlayer runs as a child of a crash supervisor.
-import CrashGuard
+import CrashGuard  # noqa: E402
 if __name__ == '__main__':
+    handleInfoOptions(sys.argv)
     CrashGuard.superviseOrContinue()
 
 from PyQt6.QtWidgets import QApplication
@@ -54,13 +92,8 @@ from HeaderBar import SKIN_LIGHT_BG, DARK_BG  # noqa: F401
 
 
 global Log
-global AppName
-AppName="TouchPlayer"
 Log = FFMPEGTools.Log
 AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "audio.png")
-#####################################################
-Version = "1.2.1"
-#####################################################
 Settings.init(AppName, Version)
 
 
@@ -1368,7 +1401,7 @@ def parseOptions(args):
     res["file"] = None
     res["virtual"]=False
     try:
-        opts, args = getopt.getopt(args[1:], "cdv", ["console", "debug", "virtual"])
+        opts, args = getopt.getopt(args[1:], SHORT_OPTIONS, LONG_OPTIONS)
         if len(args) == 1:
             res["file"] = args[0]
         else:
