@@ -131,6 +131,8 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
      - Inside the snap, `HOME` is `~/snap/touchplayer/<revision>`, so `ep.ini` lives under `~/snap/touchplayer/current/.config/TouchPlayer`.
      - USB drives and other mounts need a one-time `sudo snap connect touchplayer:removable-media`.
      - Earbud and media-key control needs the `mpris` slot named `touchplayer`, matching the bus name in `Mpris.py`.
+     - Python comes from the `core24` base, not the snap: snapcraft drops stage-packages the base already ships. So the launcher runs `/usr/bin/python3` with `PYTHONPATH` at the staged PyQt6.
+     - The `cleanup` part deletes staged files that `core24` or `gnome-46-2404` already provide. Otherwise an older staged library hides the runtime's newer one through `LD_LIBRARY_PATH`, as librsvg did.
 
 ---
 

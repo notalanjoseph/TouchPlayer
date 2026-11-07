@@ -1,3 +1,6 @@
 #!/bin/sh
-# Snap launcher: the snap's own Python, never one from the host (see install.sh for why that matters)
-exec "$SNAP/usr/bin/python3" "$SNAP/opt/touchplayer/EasyPlayer.py" "$@"
+# Snap launcher. The core24 base already ships Python 3.12, so snapcraft leaves python3 out of the snap.
+# Inside the snap, /usr/bin/python3 is that base's Python, never the host's. PyQt6 is staged under $SNAP.
+unset PYTHONHOME
+export PYTHONPATH="$SNAP/usr/lib/python3/dist-packages"
+exec /usr/bin/python3 "$SNAP/opt/touchplayer/EasyPlayer.py" "$@"

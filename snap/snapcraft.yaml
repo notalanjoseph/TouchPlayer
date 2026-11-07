@@ -71,9 +71,27 @@ parts:
   runtime:
     plugin: nil
     stage-packages:
-      - python3
+      # No python3: the core24 base ships it, so snapcraft would drop it anyway (see snap/local/touchplayer)
       - python3-pyqt6
       - qt6-wayland  # native Wayland; never force xcb (AGENTS.md)
       - libmpv2
       - ffmpeg
       # No VA-API drivers here: the gnome extension's GPU content snap provides ones matching its Mesa and libva
+
+  # Drops every file the base or the GNOME runtime already provides. A staged copy would hide the runtime's
+  # newer one through LD_LIBRARY_PATH. An older librsvg, for example, broke GNOME's SVG icon loader.
+  cleanup:
+    after: [app, runtime]
+    plugin: nil
+    build-snaps: [core24, gnome-46-2404]
+    override-prime: |
+      set -eu
+      for snap in core24 gnome-46-2404; do
+        cd "/snap/$snap/current"
+        # Real folders are skipped: core24's bin is a link to usr/bin, but the snap's bin is a folder
+        find . \( -path ./meta -o -path ./snap \) -prune -o \( -type f -o -type l \) -print 2>/dev/null |
+          while read -r file; do
+            target="${CRAFT_PRIME:?}/${file:?}"
+            if [ -L "$target" ] || [ ! -d "$target" ]; then rm -f "$target"; fi
+          done
+      done
