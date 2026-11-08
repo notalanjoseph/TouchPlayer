@@ -33,7 +33,7 @@ Most desktop Linux media players are designed strictly for traditional mouse and
 - **Single-File Playback:** Clean, immediate loading of chosen files without unwanted recursive folder scanning or accidental playlist auto-advancing.
 - **Auto-Replay on EOF:** Pressing Play or Space at the end of a video automatically restarts playback from `00:00`.
 - **Playback Speed Cycler:** Dedicated bottom-left touch button that alternates between `1x`, `1.5x`, and `2x` speeds with pitch preservation.
-- **Color Temperature Slider:** Dedicated slider to adjust warmth and coolness between `5000K` and `9000K` via mpv's `@colortemp` video filter with lightness preservation.
+- **Color Temperature Slider:** Dedicated slider to adjust warmth and coolness between `5000K` and `9000K`, applied on the GPU with lightness preservation.
 - **Clamped Brightness Slider:** Touch slider clamped to `[-30, 30]` to prevent over-washing or total blackouts.
 - **Smart Fullscreen OSD:** Dynamically borrows bottom transport and seeker bars into fullscreen with a comfortable **6-second auto-hide timeout** and drag-hold detection.
 
@@ -41,7 +41,22 @@ Most desktop Linux media players are designed strictly for traditional mouse and
 
 ## Installation
 
-### Recommended Option: **[GitHub Releases](https://github.com/notalanjoseph/TouchPlayer/releases)**
+### Recommended Option: **[Snap Store](https://snapcraft.io/touchplayer)**
+
+[![Get it from the Snap Store](https://snapcraft.io/static/images/badges/en/snap-store-black.svg)](https://snapcraft.io/touchplayer)
+
+```bash
+sudo snap install touchplayer
+```
+
+Works on Ubuntu and any Linux with [snapd](https://snapcraft.io/docs/installing-snapd).
+
+To open files on USB drives or other mounted media, allow it once:
+```bash
+sudo snap connect touchplayer:removable-media
+```
+
+### Alternative Option: **[GitHub Releases](https://github.com/notalanjoseph/TouchPlayer/releases)**
 
 #### For Ubuntu / Debian / Linux Mint:
 Download `touchplayer_*_all.deb` from the latest release. Install it using:
@@ -89,6 +104,12 @@ touchplayer /path/to/media.mp4
 
 To update TouchPlayer to a newer release:
 
+- **If installed via Snap:**
+  Nothing to do: snaps update automatically in the background. To update straight away:
+  ```bash
+  sudo snap refresh touchplayer
+  ```
+
 - **If installed via `.deb` (Ubuntu / Debian / Linux Mint):**
   Download the new `.deb` file from the latest [GitHub Releases](https://github.com/notalanjoseph/TouchPlayer/releases) and install it:
   ```bash
@@ -113,6 +134,10 @@ To update TouchPlayer to a newer release:
 
 To cleanly remove TouchPlayer from your system:
 
+- **If installed via Snap:**
+  ```bash
+  sudo snap remove touchplayer
+  ```
 - **If installed via `.deb`:**
   ```bash
   sudo apt remove touchplayer
@@ -133,12 +158,14 @@ To cleanly remove TouchPlayer from your system:
 Use `bump-my-version` to bump the version, commit, and create the release tag:
 
 ```bash
-bump-my-version bump patch   # or minor / major — bumps pyproject.toml, commits, and tags locally
+bump-my-version bump patch   # or minor / major: bumps pyproject.toml, commits, and tags locally
 git push
 git push --follow-tags
 ```
 
 `.github/workflows/release.yml` will automatically run verification tests, build the `.deb` package and universal tarball, generate SHA-256 checksums, and publish the GitHub Release with release notes.
+
+It then builds the snap and uploads it straight to the Snap Store's `stable` channel, so `snap install` users get the update automatically. Uploads that need a manual store review wait for it before going live.
 
 ---
 
