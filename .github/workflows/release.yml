@@ -140,6 +140,6 @@ jobs:
           if-no-files-found: error
 
       # Skipped until the store name is registered and the secret exists; the build above still runs
-      - name: Upload to the Snap Store (edge channel)
+      - name: Upload to the Snap Store (stable channel)
         if: env.SNAPCRAFT_STORE_CREDENTIALS != ''
-        run: snapcraft upload --release=edge touchplayer_*.snap
+        run: snapcraft upload --release=stable touchplayer_*.snap

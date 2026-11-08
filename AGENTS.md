@@ -127,7 +127,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
   1. **`.deb` package:** Automatic dependency resolution (`libmpv2`, `ffmpeg`, `python3-pyqt6`) and desktop launcher integration for Debian/Ubuntu/Mint.
   2. **Universal tarball (`touchplayer-*.tar.gz`):** Self-contained bundle with [`install.sh`](file:///home/aj/dev/TouchPlayer/install.sh) for Arch, Fedora, openSUSE, etc.
   3. **`SHA256SUMS`:** Checksum verification file.
-  4. **Snap (`snap/snapcraft.yaml`, Snap Store):** `sudo snap install touchplayer`. Built by the `snap` job in `release.yml` and uploaded to the `edge` channel; the maintainer promotes it to `stable` after testing. PyQt6, Qt, libmpv and FFmpeg are staged from the Ubuntu archive (`core24`), never pip wheels.
+  4. **Snap (`snap/snapcraft.yaml`, Snap Store):** `sudo snap install touchplayer`. Built by the `snap` job in `release.yml` and uploaded straight to the `stable` channel once the tests pass. To test a build first, install the `.snap` saved with the release run (`snap install --dangerous`). PyQt6, Qt, libmpv and FFmpeg are staged from the Ubuntu archive (`core24`), never pip wheels.
      - Inside the snap, `HOME` is `~/snap/touchplayer/<revision>`, so `ep.ini` lives under `~/snap/touchplayer/current/.config/TouchPlayer`.
      - USB drives and other mounts need a one-time `sudo snap connect touchplayer:removable-media`.
      - Earbud and media-key control needs the `mpris` slot. Give it no `name` attribute: that forces human store review, and the default (the snap name) already matches the bus name in `Mpris.py`.
