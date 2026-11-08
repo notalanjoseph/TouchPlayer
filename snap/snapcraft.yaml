@@ -14,7 +14,7 @@ description: |
 
   To open files on USB drives or other mounted media, run once:
   sudo snap connect touchplayer:removable-media
-website: https://github.com/notalanjoseph/TouchPlayer
+website: https://notalanjoseph.github.io/TouchPlayer/
 source-code: https://github.com/notalanjoseph/TouchPlayer
 issues: https://github.com/notalanjoseph/TouchPlayer/issues
 license: GPL-2.0-or-later
