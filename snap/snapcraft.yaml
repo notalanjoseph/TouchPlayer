@@ -18,7 +18,6 @@ website: https://github.com/notalanjoseph/TouchPlayer
 source-code: https://github.com/notalanjoseph/TouchPlayer
 issues: https://github.com/notalanjoseph/TouchPlayer/issues
 license: GPL-2.0-or-later
-icon: snap/gui/touchplayer.png
 
 base: core24
 grade: stable
@@ -31,8 +30,9 @@ platforms:
 
 slots:
   mpris:
+    # No name attribute: it would need human store review. The default is the snap's name, so Mpris.py's
+    # org.mpris.MediaPlayer2.touchplayer (and its .instance<pid> suffix) is already allowed.
     interface: mpris
-    name: touchplayer  # Mpris.py registers org.mpris.MediaPlayer2.touchplayer
 
 apps:
   touchplayer:

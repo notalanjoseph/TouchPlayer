@@ -130,7 +130,7 @@ All architectural decisions, UI layouts, and event handling prioritize **touchsc
   4. **Snap (`snap/snapcraft.yaml`, Snap Store):** `sudo snap install touchplayer`. Built by the `snap` job in `release.yml` and uploaded to the `edge` channel; the maintainer promotes it to `stable` after testing. PyQt6, Qt, libmpv and FFmpeg are staged from the Ubuntu archive (`core24`), never pip wheels.
      - Inside the snap, `HOME` is `~/snap/touchplayer/<revision>`, so `ep.ini` lives under `~/snap/touchplayer/current/.config/TouchPlayer`.
      - USB drives and other mounts need a one-time `sudo snap connect touchplayer:removable-media`.
-     - Earbud and media-key control needs the `mpris` slot named `touchplayer`, matching the bus name in `Mpris.py`.
+     - Earbud and media-key control needs the `mpris` slot. Give it no `name` attribute: that forces human store review, and the default (the snap name) already matches the bus name in `Mpris.py`.
      - Python comes from the `core24` base, not the snap: snapcraft drops stage-packages the base already ships. So the launcher runs `/usr/bin/python3` with `PYTHONPATH` at the staged PyQt6.
      - The `cleanup` part deletes staged files that `core24` or `gnome-46-2404` already provide. Otherwise an older staged library hides the runtime's newer one through `LD_LIBRARY_PATH`, as librsvg did. BLAS and LAPACK then come from the runtime's `blas/` and `lapack/` subfolders, which the app's `LD_LIBRARY_PATH` must list.
 
